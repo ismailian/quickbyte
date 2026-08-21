@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>QuickByte.UI</RootNamespace>
+    <AssemblyName>QuickByte</AssemblyName>
+    <AssemblyTitle>QuickByte</AssemblyTitle>
+    <Description>QuickByte download manager — multi-connection downloads with live per-connection progress.</Description>
+    <!-- Stamped into the executable's Win32 resources: this is the icon Explorer,
+         the taskbar and any installer shortcut show. Generated from
+         Controls/BrandIcon.cs — see that file before hand-editing it. -->
+    <ApplicationIcon>Assets\quickbyte.ico</ApplicationIcon>
+    <PlatformTarget>x64</PlatformTarget>
+    <SignAssembly>False</SignAssembly>
+    <PackageProjectUrl>https://quickbyte.ismailaatif.com</PackageProjectUrl>
+    <PackageIcon>quickbyte.ico</PackageIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\QuickByte.Core\QuickByte.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Assets\quickbyte.ico">
+      <Pack>True</Pack>
+      <PackagePath>\</PackagePath>
+    </None>
+  </ItemGroup>
+
+</Project>

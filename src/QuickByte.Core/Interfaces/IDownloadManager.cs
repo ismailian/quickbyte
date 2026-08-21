@@ -1,0 +1,52 @@
+using QuickByte.Core.Events;
+using QuickByte.Core.Models;
+
+namespace QuickByte.Core.Interfaces;
+
+/// <summary>
+/// Facade / registry the UI layer talks to. Owns the collection of
+/// <see cref="IDownloadService"/> instances, persists them via the
+/// repository, and re-publishes their events under one roof so both the
+/// main window and any number of open detail windows stay in sync.
+/// This is the single composition point that makes multi-window
+/// synchronization possible without windows knowing about each other.
+/// </summary>
+public interface IDownloadManager
+{
+    IReadOnlyList<DownloadItem> Downloads { get; }
+
+    event EventHandler<DownloadListChangedEventArgs>? DownloadListChanged;
+    event EventHandler<DownloadProgressEventArgs>? ProgressChanged;
+    event EventHandler<DownloadStatusChangedEventArgs>? StatusChanged;
+    event EventHandler<ConnectionsSnapshotEventArgs>? ConnectionsChanged;
+
+    Task<DownloadItem> AddDownloadAsync(string url, RemoteFileInfo fileInfo, string saveFolder, string fileName, int connectionsCount);
+
+    IDownloadService? GetService(Guid downloadId);
+
+    Task StartAsync(Guid downloadId);
+    void Pause(Guid downloadId);
+    Task ResumeAsync(Guid downloadId);
+    void Stop(Guid downloadId);
+    Task RetryAsync(Guid downloadId);
+    void Remove(Guid downloadId, bool deleteFile);
+
+    /// <summary>The application-wide cap in bytes per second; 0 means unlimited.</summary>
+    long GlobalSpeedLimitBytesPerSecond { get; }
+
+    /// <summary>
+    /// Caps one download at <paramref name="bytesPerSecond"/> (0 lifts the cap)
+    /// and persists it on the item. Applies to a transfer already in flight —
+    /// the limiter is a live object rather than a snapshotted setting.
+    /// </summary>
+    void SetSpeedLimit(Guid downloadId, long bytesPerSecond);
+
+    /// <summary>
+    /// Caps every running download to a shared <paramref name="bytesPerSecond"/>
+    /// budget (0 lifts the cap). Also applies mid-transfer. Persisting the value
+    /// is the settings layer's job; this only moves the live limiter.
+    /// </summary>
+    void SetGlobalSpeedLimit(long bytesPerSecond);
+
+    void LoadPersistedDownloads();
+}

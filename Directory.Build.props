@@ -1,0 +1,47 @@
+<Project>
+
+  <!--
+    Single source of truth for the product version and assembly metadata. Both
+    projects pick this up automatically (MSBuild imports the nearest
+    Directory.Build.props up the tree), so bumping VersionMajor/Minor/Patch here
+    moves the assemblies, the version Explorer shows on the .exe, and the About
+    box together. Nothing else in the tree should hardcode a version string —
+    the UI reads it back off its own assembly via UI/AppVersion.cs.
+
+    A build server can stamp a unique build number without editing this file:
+
+        dotnet build QuickByte.sln -p:BuildRevision=137
+
+    and a pre-release label the same way:
+
+        dotnet build QuickByte.sln -p:VersionSuffix=beta.1
+  -->
+
+  <PropertyGroup>
+    <VersionMajor>1</VersionMajor>
+    <VersionMinor>1</VersionMinor>
+    <VersionPatch>0</VersionPatch>
+    <BuildRevision Condition="'$(BuildRevision)' == ''">0</BuildRevision>
+
+    <VersionPrefix>$(VersionMajor).$(VersionMinor).$(VersionPatch)</VersionPrefix>
+
+    <!--
+      AssemblyVersion is pinned to major.minor: it is the identity the CLR binds
+      against, so letting a patch release change it would break any assembly
+      compiled against QuickByte.Core. FileVersion carries the full detail,
+      including the build number, because that is what a user reads off the
+      file's Properties page when reporting a bug.
+    -->
+    <AssemblyVersion>$(VersionMajor).$(VersionMinor).0.0</AssemblyVersion>
+    <FileVersion>$(VersionPrefix).$(BuildRevision)</FileVersion>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <Product>QuickByte</Product>
+    <Company>QuickByte</Company>
+    <Authors>QuickByte</Authors>
+    <Copyright>Copyright © $([System.DateTime]::UtcNow.Year) QuickByte</Copyright>
+    <NeutralLanguage>en-US</NeutralLanguage>
+  </PropertyGroup>
+
+</Project>
