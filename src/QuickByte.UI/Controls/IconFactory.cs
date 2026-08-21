@@ -241,6 +241,17 @@ public static class IconFactory
         g.DrawLine(pen, center, new PointF(center.X + clock.Width * 0.22f, center.Y));
     });
 
+    /// <summary>Power glyph for the tray menu's Exit entry — the one command that really closes the app.</summary>
+    public static Bitmap Exit(int size = 24) => Canvas(size, g =>
+    {
+        using var pen = new Pen(Theme.Danger, Math.Max(1.4f, size * 0.11f)) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        // The ring is left open at the top so the stem reads as breaking through
+        // it rather than sitting on top of a closed circle.
+        var ring = new RectangleF(size * 0.18f, size * 0.20f, size * 0.64f, size * 0.64f);
+        g.DrawArc(pen, ring, -60, 300);
+        g.DrawLine(pen, size * 0.50f, size * 0.14f, size * 0.50f, size * 0.46f);
+    });
+
     private static void DrawBadge(Graphics g, int size, Color color, bool plus, bool arrow = false)
     {
         var badge = new RectangleF(size * 0.50f, size * 0.50f, size * 0.46f, size * 0.46f);

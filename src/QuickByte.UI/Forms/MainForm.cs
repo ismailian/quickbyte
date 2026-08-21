@@ -61,18 +61,59 @@ public sealed class MainForm : Form
     private ToolStripButton _deleteCompletedButton = null!;
     private ToolStripButton _propertiesButton = null!;
 
+    // Menu-bar entries that mirror the toolbar commands. Held so one
+    // UpdateCommandStates() pass can grey them in step with the buttons instead
+    // of leaving the menus permanently enabled.
+    private ToolStripMenuItem _menuOpenFile = null!;
+    private ToolStripMenuItem _menuOpenFolder = null!;
+    private ToolStripMenuItem _menuResume = null!;
+    private ToolStripMenuItem _menuPause = null!;
+    private ToolStripMenuItem _menuStopAll = null!;
+    private ToolStripMenuItem _menuDelete = null!;
+    private ToolStripMenuItem _menuDeleteCompleted = null!;
+    private ToolStripMenuItem _menuProperties = null!;
+    private ToolStripMenuItem _menuRetry = null!;
+
+    // Row context-menu entries. Unlike the toolbar these are *hidden* rather
+    // than greyed when they don't apply — a right-click menu is read as a list
+    // of what you can do here, so an inert Resume on a running download is noise.
+    private ToolStripMenuItem _rowOpenFile = null!;
+    private ToolStripMenuItem _rowOpenFolder = null!;
+    private ToolStripMenuItem _rowResume = null!;
+    private ToolStripMenuItem _rowPause = null!;
+    private ToolStripMenuItem _rowStop = null!;
+    private ToolStripMenuItem _rowRetry = null!;
+    private ToolStripMenuItem _rowRemove = null!;
+    private ToolStripMenuItem _rowProperties = null!;
+
+    private TrayIconController _trayIcon = null!;
+
+    /// <summary>Windows taken down by <see cref="HideToTray"/>, to be put back when the window returns.</summary>
+    private readonly List<Form> _hiddenOwnedForms = new();
+
+    /// <summary>
+    /// Set only by <see cref="ExitApplication"/>. Until then the close button is
+    /// a hide button — see <see cref="OnFormClosing"/>.
+    /// </summary>
+    private bool _exiting;
+
     public MainForm(IDownloadManager downloadManager, ISettingsService settingsService)
     {
         _downloadManager = downloadManager;
         _settingsService = settingsService;
 
         BuildUi();
+        BuildTrayIcon();
         WireManagerEvents();
         PopulateFromExistingDownloads();
-        UpdateActionButtonsState();
+        UpdateCommandStates();
 
         _animationTimer.Tick += (_, _) => OnAnimationTick();
-        FormClosed += (_, _) => _animationTimer.Dispose();
+        FormClosed += (_, _) =>
+        {
+            _animationTimer.Dispose();
+            _trayIcon.Dispose();
+        };
     }
 
     // ---------------------------------------------------------------- UI --
@@ -131,27 +172,40 @@ public sealed class MainForm : Form
             Padding = new Padding(6, 2, 0, 2)
         };
 
+        _menuResume = MenuEntry("&Resume", IconFactory.Resume(16), async (_, _) => await OnResumeClickedAsync());
+        _menuPause = MenuEntry("&Pause", IconFactory.Pause(16), (_, _) => OnPauseClicked());
+        _menuStopAll = MenuEntry("Stop &All", IconFactory.StopAll(16), (_, _) => OnStopAllClicked());
+        _menuDelete = MenuEntry("&Delete", IconFactory.Delete(16), (_, _) => OnRemoveClicked());
+        _menuDeleteCompleted = MenuEntry("Delete &Completed", IconFactory.DeleteCompleted(16), (_, _) => OnDeleteCompletedClicked());
+
         var tasksMenu = new ToolStripMenuItem("&Tasks");
         tasksMenu.DropDownItems.Add("Add &URL...", IconFactory.AddUrl(16), (_, _) => OnAddDownloadClicked());
         tasksMenu.DropDownItems.Add(new ToolStripSeparator());
-        tasksMenu.DropDownItems.Add("&Resume", IconFactory.Resume(16), async (_, _) => await OnResumeClickedAsync());
-        tasksMenu.DropDownItems.Add("&Pause", IconFactory.Pause(16), (_, _) => OnPauseClicked());
-        tasksMenu.DropDownItems.Add("Stop &All", IconFactory.StopAll(16), (_, _) => OnStopAllClicked());
+        tasksMenu.DropDownItems.Add(_menuResume);
+        tasksMenu.DropDownItems.Add(_menuPause);
+        tasksMenu.DropDownItems.Add(_menuStopAll);
         tasksMenu.DropDownItems.Add(new ToolStripSeparator());
-        tasksMenu.DropDownItems.Add("&Delete", IconFactory.Delete(16), (_, _) => OnRemoveClicked());
-        tasksMenu.DropDownItems.Add("Delete &Completed", IconFactory.DeleteCompleted(16), (_, _) => OnDeleteCompletedClicked());
+        tasksMenu.DropDownItems.Add(_menuDelete);
+        tasksMenu.DropDownItems.Add(_menuDeleteCompleted);
         tasksMenu.DropDownItems.Add(new ToolStripSeparator());
         tasksMenu.DropDownItems.Add("&Options...", IconFactory.Settings(16), (_, _) => OnSettingsClicked());
 
+        _menuOpenFile = MenuEntry("&Open File", IconFactory.OpenFile(16), (_, _) => OpenSelectedFile());
+        _menuOpenFolder = MenuEntry("Open Containing &Folder", IconFactory.OpenFolder(16), (_, _) => OnOpenFolderClicked());
+
         var fileMenu = new ToolStripMenuItem("&File");
-        fileMenu.DropDownItems.Add("&Open File", IconFactory.OpenFile(16), (_, _) => OpenSelectedFile());
-        fileMenu.DropDownItems.Add("Open Containing &Folder", IconFactory.OpenFolder(16), (_, _) => OnOpenFolderClicked());
+        fileMenu.DropDownItems.Add(_menuOpenFile);
+        fileMenu.DropDownItems.Add(_menuOpenFolder);
         fileMenu.DropDownItems.Add(new ToolStripSeparator());
-        fileMenu.DropDownItems.Add("E&xit", null, (_, _) => Close());
+        fileMenu.DropDownItems.Add("Close to &Tray", null, (_, _) => HideToTray());
+        fileMenu.DropDownItems.Add("E&xit", IconFactory.Exit(16), (_, _) => ExitApplication());
+
+        _menuProperties = MenuEntry("&Properties...", IconFactory.Properties(16), (_, _) => OpenSelectedDetailsWindow());
+        _menuRetry = MenuEntry("&Retry", IconFactory.Retry(16), async (_, _) => await OnRetryClickedAsync());
 
         var downloadsMenu = new ToolStripMenuItem("&Downloads");
-        downloadsMenu.DropDownItems.Add("&Properties...", IconFactory.Properties(16), (_, _) => OpenSelectedDetailsWindow());
-        downloadsMenu.DropDownItems.Add("&Retry", IconFactory.Retry(16), async (_, _) => await OnRetryClickedAsync());
+        downloadsMenu.DropDownItems.Add(_menuProperties);
+        downloadsMenu.DropDownItems.Add(_menuRetry);
 
         var viewMenu = new ToolStripMenuItem("&View");
         var toolbarToggle = new ToolStripMenuItem("&Toolbar") { CheckOnClick = true, Checked = true };
@@ -164,8 +218,21 @@ public sealed class MainForm : Form
         var helpMenu = new ToolStripMenuItem("&Help");
         helpMenu.DropDownItems.Add("&About QuickByte...", IconFactory.Properties(16), (_, _) => ShowAboutDialog());
 
+        // The selection can change without the mouse ever touching a row (a
+        // status change re-filters the list), so the states are refreshed as the
+        // drop-down opens rather than trusted to be current.
+        foreach (var top in new[] { fileMenu, tasksMenu, downloadsMenu })
+            top.DropDownOpening += (_, _) => UpdateCommandStates();
+
         menu.Items.AddRange(new ToolStripItem[] { fileMenu, tasksMenu, downloadsMenu, viewMenu, helpMenu });
         return menu;
+    }
+
+    private static ToolStripMenuItem MenuEntry(string text, Bitmap icon, EventHandler onClick)
+    {
+        var item = new ToolStripMenuItem(text, icon);
+        item.Click += onClick;
+        return item;
     }
 
     private void ShowAboutDialog()
@@ -395,11 +462,37 @@ public sealed class MainForm : Form
 
         listView.DrawSubItem += ListView_DrawSubItem;
         listView.MouseDoubleClick += (_, _) => OnRowActivated();
-        listView.SelectedIndexChanged += (_, _) => UpdateActionButtonsState();
+        listView.MouseDown += ListView_MouseDown;
+        listView.SelectedIndexChanged += (_, _) => UpdateCommandStates();
         listView.KeyDown += ListView_KeyDown;
         listView.ContextMenuStrip = BuildRowContextMenu();
 
         return listView;
+    }
+
+    /// <summary>
+    /// A ListView doesn't move the selection on a right-click, so the menu would
+    /// otherwise describe whichever row happened to be selected last rather than
+    /// the one under the cursor. Right-clicking empty space clears the selection,
+    /// which is what makes the menu decline to open there.
+    /// </summary>
+    private void ListView_MouseDown(object? sender, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Right) return;
+
+        var hit = _listView.GetItemAt(e.X, e.Y);
+        if (hit is null)
+        {
+            _listView.SelectedItems.Clear();
+            return;
+        }
+
+        // Leave an existing multi-selection intact if the click landed inside it.
+        if (hit.Selected) return;
+
+        _listView.SelectedItems.Clear();
+        hit.Selected = true;
+        hit.Focused = true;
     }
 
     private void ListView_KeyDown(object? sender, KeyEventArgs e)
@@ -417,6 +510,15 @@ public sealed class MainForm : Form
 
     private ContextMenuStrip BuildRowContextMenu()
     {
+        _rowOpenFile = MenuEntry("Open File", IconFactory.OpenFile(16), (_, _) => OpenSelectedFile());
+        _rowOpenFolder = MenuEntry("Open Containing Folder", IconFactory.OpenFolder(16), (_, _) => OnOpenFolderClicked());
+        _rowResume = MenuEntry("Resume", IconFactory.Resume(16), async (_, _) => await OnResumeClickedAsync());
+        _rowPause = MenuEntry("Pause", IconFactory.Pause(16), (_, _) => OnPauseClicked());
+        _rowStop = MenuEntry("Stop", IconFactory.Stop(16), (_, _) => OnStopClicked());
+        _rowRetry = MenuEntry("Retry", IconFactory.Retry(16), async (_, _) => await OnRetryClickedAsync());
+        _rowRemove = MenuEntry("Remove", IconFactory.Delete(16), (_, _) => OnRemoveClicked());
+        _rowProperties = MenuEntry("Properties...", IconFactory.Properties(16), (_, _) => OpenSelectedDetailsWindow());
+
         var menu = new ContextMenuStrip
         {
             RenderMode = ToolStripRenderMode.Professional,
@@ -425,19 +527,81 @@ public sealed class MainForm : Form
             Font = Theme.Ui,
             ShowImageMargin = true
         };
-        menu.Items.Add("Open File", IconFactory.OpenFile(16), (_, _) => OpenSelectedFile());
-        menu.Items.Add("Open Containing Folder", IconFactory.OpenFolder(16), (_, _) => OnOpenFolderClicked());
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Resume", IconFactory.Resume(16), async (_, _) => await OnResumeClickedAsync());
-        menu.Items.Add("Pause", IconFactory.Pause(16), (_, _) => OnPauseClicked());
-        menu.Items.Add("Stop", IconFactory.Stop(16), (_, _) => OnStopClicked());
-        menu.Items.Add("Retry", IconFactory.Retry(16), async (_, _) => await OnRetryClickedAsync());
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Remove", IconFactory.Delete(16), (_, _) => OnRemoveClicked());
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Properties...", IconFactory.Properties(16), (_, _) => OpenSelectedDetailsWindow());
-        menu.Opening += (_, _) => UpdateActionButtonsState();
+        menu.Items.AddRange(new ToolStripItem[]
+        {
+            _rowOpenFile, _rowOpenFolder, new ToolStripSeparator(),
+            _rowResume, _rowPause, _rowStop, _rowRetry, new ToolStripSeparator(),
+            _rowRemove, new ToolStripSeparator(),
+            _rowProperties
+        });
+        menu.Opening += RowContextMenu_Opening;
         return menu;
+    }
+
+    /// <summary>
+    /// Rebuilds the menu for whatever is selected: every entry that can't act on
+    /// the selection is hidden, and the separators left stranded by those
+    /// hidden entries go with them. With nothing selected there is no menu at
+    /// all rather than a column of dead entries.
+    /// </summary>
+    private void RowContextMenu_Opening(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        var selection = SelectedItems();
+        if (selection.Count == 0) { e.Cancel = true; return; }
+
+        // Open File / Open Folder / Properties act on one download. Rather than
+        // silently picking the first of many, they only appear for a single
+        // selection; the lifecycle commands below apply to the whole selection
+        // and appear whenever any part of it can use them.
+        var single = selection.Count == 1 ? selection[0] : null;
+
+        _rowOpenFile.Available = single is not null && DownloadActions.CanOpenFile(single);
+        _rowOpenFolder.Available = single is not null && DownloadActions.CanOpenFolder(single);
+        _rowProperties.Available = single is not null;
+
+        _rowResume.Available = selection.Any(DownloadActions.CanResume);
+        _rowPause.Available = selection.Any(DownloadActions.CanPause);
+        _rowStop.Available = selection.Any(DownloadActions.CanStop);
+        _rowRetry.Available = selection.Any(DownloadActions.CanRetry);
+        _rowRemove.Available = true;
+
+        // Plural labels when the command is about to hit more than one row —
+        // "Remove" reading the same for 1 and 12 downloads is how people delete
+        // more than they meant to.
+        _rowResume.Text = selection.Count > 1 ? $"Resume ({selection.Count(DownloadActions.CanResume)})" : "Resume";
+        _rowPause.Text = selection.Count > 1 ? $"Pause ({selection.Count(DownloadActions.CanPause)})" : "Pause";
+        _rowStop.Text = selection.Count > 1 ? $"Stop ({selection.Count(DownloadActions.CanStop)})" : "Stop";
+        _rowRetry.Text = selection.Count > 1 ? $"Retry ({selection.Count(DownloadActions.CanRetry)})" : "Retry";
+        _rowRemove.Text = selection.Count > 1 ? $"Remove {selection.Count} Downloads" : "Remove";
+
+        TrimSeparators(((ContextMenuStrip)sender!).Items);
+        UpdateCommandStates();
+    }
+
+    /// <summary>
+    /// Hides leading, trailing and doubled separators left behind by hidden
+    /// entries. Reads and writes <see cref="ToolStripItem.Available"/>, not
+    /// <c>Visible</c>: the latter also reports whether the parent drop-down is on
+    /// screen, so during <c>Opening</c> it is false for every item in the menu.
+    /// </summary>
+    private static void TrimSeparators(ToolStripItemCollection items)
+    {
+        ToolStripSeparator? pending = null;
+        bool anyBefore = false;
+
+        foreach (ToolStripItem entry in items)
+        {
+            if (entry is ToolStripSeparator separator)
+            {
+                separator.Available = false;
+                if (anyBefore) pending = separator;
+                continue;
+            }
+
+            if (!entry.Available) continue;
+            if (pending is not null) { pending.Available = true; pending = null; }
+            anyBefore = true;
+        }
     }
 
     // ------------------------------------------------------------ Painting --
@@ -568,7 +732,7 @@ public sealed class MainForm : Form
                 form.Close();
         }
         UpdateStatusBar();
-        UpdateActionButtonsState();
+        UpdateCommandStates();
     }
 
     private void OnProgressChanged(object? sender, DownloadProgressEventArgs e)
@@ -612,7 +776,7 @@ public sealed class MainForm : Form
         if (row.ListView is not null) _listView.Invalidate(row.Bounds);
 
         SetRowVisible(row, PassesFilter(item));
-        UpdateActionButtonsState();
+        UpdateCommandStates();
         UpdateStatusBar();
 
         if (e.NewStatus == DownloadStatus.Completed)
@@ -726,7 +890,7 @@ public sealed class MainForm : Form
     {
         int total = _orderedRows.Count;
         var items = _orderedRows.Select(r => (DownloadItem)r.Tag!).ToList();
-        int active = items.Count(i => i.Status is DownloadStatus.Downloading or DownloadStatus.Connecting or DownloadStatus.Merging);
+        int active = items.Count(DownloadActions.IsActive);
         int completed = items.Count(i => i.Status == DownloadStatus.Completed);
         double totalSpeed = items
             .Where(i => i.Status is DownloadStatus.Downloading)
@@ -737,12 +901,24 @@ public sealed class MainForm : Form
 
         string speed = active > 0 ? $"▼ {ByteFormatter.FormatSpeed(totalSpeed)}" : string.Empty;
         if (_speedLabel.Text != speed) _speedLabel.Text = speed;
+
+        // Same numbers on the tray tooltip: with the window hidden it is the only
+        // place they are readable.
+        _trayIcon.UpdateTooltip(active, totalSpeed);
     }
 
     // ------------------------------------------------------------ Actions --
 
     private DownloadItem? SelectedItem =>
         _listView.SelectedItems.Count > 0 ? (DownloadItem)_listView.SelectedItems[0].Tag! : null;
+
+    /// <summary>
+    /// Snapshot of the selection. A list, not the live collection: the lifecycle
+    /// commands change status, which re-filters rows out from under an
+    /// enumeration of <see cref="ListView.SelectedItems"/>.
+    /// </summary>
+    private List<DownloadItem> SelectedItems() =>
+        _listView.SelectedItems.Cast<ListViewItem>().Select(row => (DownloadItem)row.Tag!).ToList();
 
     private void OnRowActivated()
     {
@@ -800,6 +976,7 @@ public sealed class MainForm : Form
             WindowState = FormWindowState.Normal;
 
         Show();
+        RestoreHiddenOwnedForms();
         Activate();
 
         // A process that isn't already in the foreground can't simply take focus
@@ -822,53 +999,74 @@ public sealed class MainForm : Form
             result.Url, result.FileInfo, result.SaveFolder, result.FileName, result.ConnectionsCount);
     }
 
+    /// <summary>
+    /// Resumes every selected download that can be resumed. The tasks are
+    /// started first and awaited together, never awaited one at a time:
+    /// <see cref="IDownloadManager.ResumeAsync"/> completes when the *download*
+    /// does, so a sequential loop would hold each one back until the previous
+    /// file had finished. Overlap is the concurrency gate's business, not this
+    /// handler's.
+    /// </summary>
     private async Task OnResumeClickedAsync()
     {
-        var item = SelectedItem;
-        if (item is null) return;
-        await _downloadManager.ResumeAsync(item.Id);
+        var tasks = SelectedItems()
+            .Where(DownloadActions.CanResume)
+            .Select(item => _downloadManager.ResumeAsync(item.Id))
+            .ToList();
+        if (tasks.Count == 0) return;
+        await Task.WhenAll(tasks);
     }
 
     private void OnPauseClicked()
     {
-        var item = SelectedItem;
-        if (item is null) return;
-        _downloadManager.Pause(item.Id);
+        foreach (var item in SelectedItems().Where(DownloadActions.CanPause))
+            _downloadManager.Pause(item.Id);
     }
 
     private void OnStopClicked()
     {
-        var item = SelectedItem;
-        if (item is null) return;
-        _downloadManager.Stop(item.Id);
+        var stoppable = SelectedItems().Where(DownloadActions.CanStop).ToList();
+        if (stoppable.Count == 0) return;
+
+        // Stop deletes the chunk files, so unlike Pause it can't be undone by
+        // clicking Resume. A single row stays a single click, as it always was;
+        // discarding a whole selection's worth of partial data in one go is new
+        // and worth a prompt.
+        if (stoppable.Count > 1 &&
+            MessageBox.Show(this, $"Stop {stoppable.Count} downloads?\nTheir partially downloaded data is discarded.",
+                "Stop Downloads", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+            return;
+
+        foreach (var item in stoppable)
+            _downloadManager.Stop(item.Id);
     }
 
-    private void OnStopAllClicked()
-    {
-        foreach (var item in _orderedRows.Select(r => (DownloadItem)r.Tag!).ToList())
-        {
-            if (item.Status is DownloadStatus.Downloading or DownloadStatus.Connecting)
-                _downloadManager.Pause(item.Id);
-        }
-    }
+    private void OnStopAllClicked() => _downloadManager.PauseAll();
 
     private async Task OnRetryClickedAsync()
     {
-        var item = SelectedItem;
-        if (item is null) return;
-        await _downloadManager.RetryAsync(item.Id);
+        var tasks = SelectedItems()
+            .Where(DownloadActions.CanRetry)
+            .Select(item => _downloadManager.RetryAsync(item.Id))
+            .ToList();
+        if (tasks.Count == 0) return;
+        await Task.WhenAll(tasks);
     }
 
     private void OnRemoveClicked()
     {
-        var item = SelectedItem;
-        if (item is null) return;
+        var items = SelectedItems();
+        if (items.Count == 0) return;
 
-        var confirm = MessageBox.Show(this, $"Remove \"{item.FileName}\" from the list?\nAlso delete the downloaded file?",
-            "Remove Download", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+        string prompt = items.Count == 1
+            ? $"Remove \"{items[0].FileName}\" from the list?\nAlso delete the downloaded file?"
+            : $"Remove {items.Count} downloads from the list?\nAlso delete the downloaded files?";
+
+        var confirm = MessageBox.Show(this, prompt, "Remove Download", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
         if (confirm == DialogResult.Cancel) return;
 
-        _downloadManager.Remove(item.Id, deleteFile: confirm == DialogResult.Yes);
+        foreach (var item in items)
+            _downloadManager.Remove(item.Id, deleteFile: confirm == DialogResult.Yes);
     }
 
     private void OnDeleteCompletedClicked()
@@ -904,17 +1102,134 @@ public sealed class MainForm : Form
         settingsForm.ShowDialog(this);
     }
 
-    private void UpdateActionButtonsState()
+    /// <summary>
+    /// Single pass that greys every toolbar button and menu-bar entry against
+    /// the current selection, using the same <see cref="DownloadActions"/>
+    /// predicates the row context menu hides its entries with. Called on
+    /// selection changes, on status changes, and again as each drop-down opens.
+    /// </summary>
+    private void UpdateCommandStates()
     {
-        var item = SelectedItem;
-        bool hasSelection = item is not null;
-        var items = _orderedRows.Select(r => (DownloadItem)r.Tag!).ToList();
+        var selection = SelectedItems();
+        var all = _orderedRows.Select(r => (DownloadItem)r.Tag!).ToList();
+        var single = selection.Count == 1 ? selection[0] : null;
 
-        _resumeButton.Enabled = hasSelection && item!.Status is DownloadStatus.Paused or DownloadStatus.Queued or DownloadStatus.Failed or DownloadStatus.Cancelled;
-        _pauseButton.Enabled = hasSelection && item!.Status is DownloadStatus.Downloading or DownloadStatus.Connecting;
-        _stopAllButton.Enabled = items.Any(i => i.Status is DownloadStatus.Downloading or DownloadStatus.Connecting);
+        bool canResume = selection.Any(DownloadActions.CanResume);
+        bool canPause = selection.Any(DownloadActions.CanPause);
+        bool canRetry = selection.Any(DownloadActions.CanRetry);
+        bool anyRunning = all.Any(DownloadActions.CanPause);
+        bool anyCompleted = all.Any(i => i.Status == DownloadStatus.Completed);
+        bool hasSelection = selection.Count > 0;
+
+        _resumeButton.Enabled = canResume;
+        _pauseButton.Enabled = canPause;
+        _stopAllButton.Enabled = anyRunning;
         _deleteButton.Enabled = hasSelection;
-        _propertiesButton.Enabled = hasSelection;
-        _deleteCompletedButton.Enabled = items.Any(i => i.Status == DownloadStatus.Completed);
+        _propertiesButton.Enabled = single is not null;
+        _deleteCompletedButton.Enabled = anyCompleted;
+
+        _menuResume.Enabled = canResume;
+        _menuPause.Enabled = canPause;
+        _menuStopAll.Enabled = anyRunning;
+        _menuDelete.Enabled = hasSelection;
+        _menuDeleteCompleted.Enabled = anyCompleted;
+        _menuRetry.Enabled = canRetry;
+        _menuProperties.Enabled = single is not null;
+        _menuOpenFile.Enabled = single is not null && DownloadActions.CanOpenFile(single);
+        _menuOpenFolder.Enabled = single is not null && DownloadActions.CanOpenFolder(single);
+    }
+
+    // ---------------------------------------------------------- Tray + exit --
+
+    private void BuildTrayIcon()
+    {
+        _trayIcon = new TrayIconController(_downloadManager);
+        _trayIcon.OpenRequested += (_, _) => RestoreAndActivate();
+        _trayIcon.AddUrlRequested += (_, _) =>
+        {
+            // The Add dialog is modal on this window, so the window has to be
+            // back before it opens — otherwise the dialog is the only thing on
+            // screen and dismissing it leaves nothing behind.
+            RestoreAndActivate();
+            OnAddDownloadClicked();
+        };
+        _trayIcon.PauseAllRequested += (_, _) => _downloadManager.PauseAll();
+        _trayIcon.ResumeAllRequested += (_, _) => ResumeAll();
+        _trayIcon.ExitRequested += (_, _) => ExitApplication();
+    }
+
+    private async void ResumeAll()
+    {
+        var tasks = _downloadManager.Downloads
+            .Where(DownloadActions.CanResume)
+            .Select(item => _downloadManager.ResumeAsync(item.Id))
+            .ToList();
+        if (tasks.Count == 0) return;
+        await Task.WhenAll(tasks);
+    }
+
+    /// <summary>
+    /// Puts the whole application out of sight, not just this window. Hiding an
+    /// owner does <em>not</em> hide the windows it owns — verified, not assumed —
+    /// so any open details or completion window would otherwise be left floating
+    /// on the desktop with nothing behind it. They are remembered so the same set
+    /// comes back when the window does.
+    /// </summary>
+    private void HideToTray()
+    {
+        _hiddenOwnedForms.Clear();
+        foreach (var owned in OwnedForms)
+        {
+            if (!owned.Visible) continue;
+            _hiddenOwnedForms.Add(owned);
+            owned.Hide();
+        }
+
+        Hide();
+        _trayIcon.NotifyWindowHidden();
+    }
+
+    private void RestoreHiddenOwnedForms()
+    {
+        foreach (var owned in _hiddenOwnedForms)
+        {
+            if (!owned.IsDisposed) owned.Show();
+        }
+        _hiddenOwnedForms.Clear();
+    }
+
+    /// <summary>
+    /// The only path that really closes QuickByte. Everything else — the title
+    /// bar's X, Alt+F4, File &gt; Close to Tray — hides the window and leaves the
+    /// downloads running.
+    /// </summary>
+    private void ExitApplication()
+    {
+        _exiting = true;
+        Close();
+    }
+
+    /// <summary>
+    /// Turns a user-initiated close into a hide unless <see cref="ExitApplication"/>
+    /// asked for it. On a genuine exit every in-flight download is paused first:
+    /// pausing leaves the chunk files on disk and persists the paused status
+    /// through the repository, so the next launch resumes from exactly where the
+    /// process stopped instead of finding a half-written download that
+    /// <c>LoadPersistedDownloads</c> has to downgrade after the fact.
+    ///
+    /// Windows shutting the session down is not negotiable — that close is
+    /// honoured, and the pause still runs.
+    /// </summary>
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        if (!_exiting && e.CloseReason is CloseReason.UserClosing or CloseReason.None)
+        {
+            e.Cancel = true;
+            HideToTray();
+            return;
+        }
+
+        _downloadManager.PauseAll();
+        base.OnFormClosing(e);
     }
 }

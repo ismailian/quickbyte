@@ -165,6 +165,21 @@ public sealed class DownloadManager : IDownloadManager
 
     public void Pause(Guid downloadId) => _services.GetValueOrDefault(downloadId)?.Pause();
 
+    public int PauseAll()
+    {
+        int paused = 0;
+        foreach (var service in _services.Values)
+        {
+            // Ask the item, not the service: Pause() is a no-op for anything that
+            // isn't in flight, and the count is what lets a caller (shutdown) know
+            // whether it has anything to wait on.
+            if (!DownloadActions.CanPause(service.Item)) continue;
+            service.Pause();
+            paused++;
+        }
+        return paused;
+    }
+
     public async Task ResumeAsync(Guid downloadId) => await StartAsync(downloadId).ConfigureAwait(false);
 
     public void Stop(Guid downloadId) => _services.GetValueOrDefault(downloadId)?.Stop();

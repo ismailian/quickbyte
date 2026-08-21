@@ -26,6 +26,17 @@ public interface IDownloadManager
 
     Task StartAsync(Guid downloadId);
     void Pause(Guid downloadId);
+
+    /// <summary>
+    /// Pauses every download currently in flight, leaving their chunk files in
+    /// place so each one resumes where it stopped. Returns the number actually
+    /// paused. Used both by "Stop All" and by application shutdown — the manager
+    /// owns this rather than the UI because it is the only component that can
+    /// see every service, and because each pause persists through the same
+    /// repository write.
+    /// </summary>
+    int PauseAll();
+
     Task ResumeAsync(Guid downloadId);
     void Stop(Guid downloadId);
     Task RetryAsync(Guid downloadId);

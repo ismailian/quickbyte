@@ -3,6 +3,7 @@ bin/
 obj/
 *.user
 .vs/
+src/QuickByte.UI/Properties/
 
 ## Rider / VS Code
 .idea/
