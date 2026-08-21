@@ -56,7 +56,7 @@ public sealed class DownloadDetailsForm : Form
     private Button _cancelButton = null!;
     private Button _retryButton = null!;
     private Button _openFolderButton = null!;
-    private bool _detailsExpanded = true;
+    private bool _detailsExpanded = false;
     private bool _openOnCompleteRequested;
 
     public DownloadDetailsForm(DownloadItem item, IDownloadManager downloadManager)
@@ -82,10 +82,12 @@ public sealed class DownloadDetailsForm : Form
     private void BuildUi()
     {
         Text = _item.FileName;
-        Width = 680;
-        Height = 620;
+        Width = 600;
+        Height = 420;
         StartPosition = FormStartPosition.CenterParent;
-        MinimumSize = new Size(560, 460);
+        MinimumSize = new Size(600, 420);
+        MaximumSize = new Size(600, 800);
+        MaximizeBox = false;
         BackColor = Theme.Surface;
         Font = Theme.Ui;
         Icon = CreateWindowIcon();
@@ -199,7 +201,7 @@ public sealed class DownloadDetailsForm : Form
         var toggleRow = new Panel { Dock = DockStyle.Top, Height = 34, BackColor = Theme.Surface };
         _hideDetailsButton = new Button
         {
-            Text = "▲  Hide details",
+            Text = "▼  Show details",
             AutoSize = false,
             Width = 130,
             Height = 26,
@@ -429,7 +431,7 @@ public sealed class DownloadDetailsForm : Form
         listView.SetRowHeight(24);
         listView.Columns.Add("#", 40);
         listView.Columns.Add("Downloaded", 110);
-        listView.Columns.Add("Progress", 310);
+        listView.Columns.Add("Progress", 190);
         listView.Columns.Add("Info", 140);
         listView.DrawSubItem += ConnectionsListView_DrawSubItem;
         return listView;
@@ -707,6 +709,14 @@ public sealed class DownloadDetailsForm : Form
 
     private void InitializeComponent()
     {
+        SuspendLayout();
+        // 
+        // DownloadDetailsForm
+        // 
+        ClientSize = new Size(282, 253);
+        MaximizeBox = false;
+        Name = "DownloadDetailsForm";
+        ResumeLayout(false);
 
     }
 
