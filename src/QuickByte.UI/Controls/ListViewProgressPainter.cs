@@ -1,6 +1,7 @@
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
+using QuickByte.Core.Helpers;
 
 namespace QuickByte.UI.Controls;
 
@@ -50,7 +51,7 @@ public static class ListViewProgressPainter
                                       TextFormatFlags.SingleLine | TextFormatFlags.NoPadding |
                                       TextFormatFlags.PreserveGraphicsClipping;
 
-        string text = $"{percentage:0.0}%";
+        string text = ByteFormatter.FormatPercentage(percentage);
 
         // Each pass intersects the caller's clip rather than replacing it, so a
         // partially scrolled row can't paint text outside its update region.

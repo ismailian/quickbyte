@@ -610,7 +610,7 @@ public sealed class DownloadDetailsForm : Form
 
         _sizeValueLabel.Text = total > 0 ? ByteFormatter.FormatBytes(total) : "Unknown";
         double percentage = total > 0 ? Math.Min(100.0, downloaded * 100.0 / total) : 0;
-        _downloadedValueLabel.Text = $"{ByteFormatter.FormatBytes(downloaded)}  ({percentage:0.00} %)";
+        _downloadedValueLabel.Text = $"{ByteFormatter.FormatBytes(downloaded)}  ({ByteFormatter.FormatPercentage(percentage)})";
         _speedValueLabel.Text = merging || speed <= 0 ? "—" : ByteFormatter.FormatSpeed(speed);
         _etaValueLabel.Text = merging ? "—" : ByteFormatter.FormatEta(eta);
 
@@ -625,13 +625,13 @@ public sealed class DownloadDetailsForm : Form
         // While merging the bar stays full and reports merge progress as text —
         // the bytes are already on disk, so rewinding the bar would be a lie.
         _overallProgressBar.OverlayText = merging
-            ? $"Merging file parts…  {(progress?.MergePercentage ?? _item.MergeProgressPercentage):0}%"
+            ? $"Merging file parts…  {ByteFormatter.FormatPercentage(progress?.MergePercentage ?? _item.MergeProgressPercentage)}"
             : null;
         _overallProgressBar.SetValue(percentage, immediate);
 
         Text = _item.Status == DownloadStatus.Completed
             ? $"Complete — {_item.FileName}"
-            : $"{(int)percentage}%  {_item.FileName}";
+            : $"{ByteFormatter.FormatPercentage(percentage)}  {_item.FileName}";
     }
 
     private static string StatusText(DownloadStatus status) => status switch
@@ -690,10 +690,12 @@ public sealed class DownloadDetailsForm : Form
             return;
         }
 
+        // Cell-scoped for the same reason MainForm's tick is: the connection
+        // rows animate continuously, and only the progress cell changes.
         foreach (var id in moved)
         {
-            if (_connectionRowsById.TryGetValue(id, out var row) && row.ListView is not null)
-                _connectionsListView.Invalidate(row.Bounds);
+            if (_connectionRowsById.TryGetValue(id, out var row))
+                _connectionsListView.InvalidateCell(row, ConnectionColumnProgress);
         }
     }
 

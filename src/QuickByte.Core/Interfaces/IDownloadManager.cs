@@ -60,4 +60,15 @@ public interface IDownloadManager
     void SetGlobalSpeedLimit(long bytesPerSecond);
 
     void LoadPersistedDownloads();
+
+    /// <summary>
+    /// Deletes chunk folders under the temp root that no download in the list
+    /// claims, and returns how many went. A stopped download whose connections
+    /// were still holding their part files open leaves its folder behind, and
+    /// nothing else ever revisits it — so the app would quietly accumulate the
+    /// full size of every cancelled download. Runs off the UI thread and after
+    /// <see cref="LoadPersistedDownloads"/>, which is what makes "not claimed"
+    /// mean "orphaned" rather than "not loaded yet".
+    /// </summary>
+    Task<int> CleanupOrphanedTempFoldersAsync();
 }

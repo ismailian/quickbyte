@@ -453,11 +453,11 @@ public sealed class MainForm : Form
         listView.SetRowHeight(RowHeight);
 
         listView.Columns.Add("File Name", 228);
-        listView.Columns.Add("Size", 80);
+        listView.Columns.Add("Size", 100);
         listView.Columns.Add("Progress", 118);
         listView.Columns.Add("Transfer Rate", 116);
         listView.Columns.Add("Time Left", 96);
-        listView.Columns.Add("Status", 122);
+        listView.Columns.Add("Status", 140);
         listView.Columns.Add("Description", 140);
 
         listView.DrawSubItem += ListView_DrawSubItem;
@@ -680,7 +680,7 @@ public sealed class MainForm : Form
     {
         DownloadStatus.Connecting => "Connecting",
         DownloadStatus.Downloading => "Downloading",
-        DownloadStatus.Merging => $"Merging {item.MergeProgressPercentage:0}%",
+        DownloadStatus.Merging => $"Merging {ByteFormatter.FormatPercentage(item.MergeProgressPercentage)}",
         DownloadStatus.Completed => "Complete",
         DownloadStatus.Cancelled => "Cancelled",
         _ => item.Status.ToString()
@@ -773,7 +773,7 @@ public sealed class MainForm : Form
         }
 
         EnsureAnimating();
-        if (row.ListView is not null) _listView.Invalidate(row.Bounds);
+        _listView.InvalidateRow(row);
 
         SetRowVisible(row, PassesFilter(item));
         UpdateCommandStates();
@@ -879,10 +879,15 @@ public sealed class MainForm : Form
             return;
         }
 
+        // Only the progress cell moved, so only the progress cell is repainted.
+        // Invalidating the whole row here re-ran every column's owner-draw 60
+        // times a second — the category icon blit and six text runs — on top of
+        // whatever row the pointer was hovering, which is what made a hovered
+        // row look like it was flickering.
         foreach (var id in moved)
         {
-            if (_rowsById.TryGetValue(id, out var row) && row.ListView is not null)
-                _listView.Invalidate(row.Bounds);
+            if (_rowsById.TryGetValue(id, out var row))
+                _listView.InvalidateCell(row, ProgressColumnIndex);
         }
     }
 

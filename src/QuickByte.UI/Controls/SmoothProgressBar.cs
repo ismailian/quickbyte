@@ -1,6 +1,7 @@
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
+using QuickByte.Core.Helpers;
 
 namespace QuickByte.UI.Controls;
 
@@ -117,7 +118,7 @@ public sealed class SmoothProgressBar : Control
         using (var borderPen = new Pen(Theme.Border))
             g.DrawRectangle(borderPen, track);
 
-        string text = _overlayText ?? $"{_displayed:0.0}%";
+        string text = _overlayText ?? ByteFormatter.FormatPercentage(_displayed);
         if (string.IsNullOrEmpty(text)) return;
 
         // Draw the label twice, clipped to each side of the fill edge, so it

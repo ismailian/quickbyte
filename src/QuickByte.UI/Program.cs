@@ -49,6 +49,11 @@ internal static class Program
 
             downloadManager.LoadPersistedDownloads();
 
+            // Only meaningful once the list is loaded — until then every folder
+            // looks unclaimed. Deliberately not awaited: it walks the temp
+            // volume, and nothing on screen depends on the result.
+            _ = downloadManager.CleanupOrphanedTempFoldersAsync();
+
             var mainForm = new MainForm(downloadManager, settingsService);
 
             // The pipe listener raises this on a thread-pool thread, so it goes

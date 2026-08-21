@@ -24,6 +24,9 @@ public sealed class DownloadService : IDownloadService
     private readonly ISettingsService _settingsService;
     private readonly Action<DownloadItem> _persist;
 
+    private const int TempDeleteAttempts = 10;
+    private const int TempDeleteRetryDelayMilliseconds = 250;
+
     private CancellationTokenSource? _cts;
     private RemoteFileInfo? _lastFileInfo;
     private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
@@ -158,7 +161,7 @@ public sealed class DownloadService : IDownloadService
     {
         _cts?.Cancel();
         SetStatus(DownloadStatus.Cancelled);
-        TryDeleteTempFolder();
+        ScheduleTempFolderDeletion();
     }
 
     public async Task RetryAsync()
@@ -168,14 +171,40 @@ public sealed class DownloadService : IDownloadService
         await StartAsync().ConfigureAwait(false);
     }
 
-    private void TryDeleteTempFolder()
+    /// <summary>
+    /// Deletes the download's chunk folder, retrying for a couple of seconds.
+    /// <see cref="Stop"/> cancels and returns immediately, but the connection
+    /// tasks are still unwinding at that point and still hold their part files
+    /// open, so a delete issued inline loses the race every time — which is how
+    /// a stopped download used to leave its chunks occupying disk. Bails out if
+    /// the download comes back to life in the meantime (Retry), so a fresh set
+    /// of chunks can't be deleted out from under it.
+    /// </summary>
+    private void ScheduleTempFolderDeletion()
     {
-        try
+        string path = Item.TempFolderPath;
+        if (string.IsNullOrEmpty(path)) return;
+
+        _ = Task.Run(async () =>
         {
-            if (!string.IsNullOrEmpty(Item.TempFolderPath) && Directory.Exists(Item.TempFolderPath))
-                Directory.Delete(Item.TempFolderPath, recursive: true);
-        }
-        catch { /* best-effort cleanup */ }
+            for (int attempt = 0; attempt < TempDeleteAttempts; attempt++)
+            {
+                if (Item.Status is not DownloadStatus.Cancelled) return;
+
+                try
+                {
+                    if (!Directory.Exists(path)) return;
+                    Directory.Delete(path, recursive: true);
+                    return;
+                }
+                catch { /* best-effort — a connection still has a chunk open */ }
+
+                await Task.Delay(TempDeleteRetryDelayMilliseconds).ConfigureAwait(false);
+            }
+            // Still locked after all that: DownloadManager's startup sweep
+            // collects it, which is why that sweep treats a cancelled item's
+            // TempFolderPath as unclaimed rather than in use.
+        });
     }
 
     private void OnPoolProgressChanged(object? sender, DownloadProgressEventArgs e)

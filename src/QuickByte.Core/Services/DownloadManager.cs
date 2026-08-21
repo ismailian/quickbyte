@@ -100,6 +100,64 @@ public sealed class DownloadManager : IDownloadManager
         }
     }
 
+    public Task<int> CleanupOrphanedTempFoldersAsync() => Task.Run(() =>
+    {
+        string root = _settingsService.Current.TempFolder;
+        if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)) return 0;
+
+        string[] candidates;
+        try { candidates = Directory.GetDirectories(root); }
+        catch { return 0; /* best-effort */ }
+
+        int deleted = 0;
+        foreach (string candidate in candidates)
+        {
+            // Only folders this app names. TempFolder is user-configurable and
+            // may well point at a directory shared with other programs, so the
+            // sweep is deliberately restricted to the Guid("N") shape both
+            // AddDownloadAsync and DownloadService create — anything else in
+            // there belongs to someone else.
+            if (!Guid.TryParseExact(Path.GetFileName(candidate), "N", out _)) continue;
+
+            // Re-checked per folder rather than against one up-front snapshot:
+            // a download added while the sweep runs must not lose its chunks.
+            if (IsTempFolderInUse(candidate)) continue;
+
+            try
+            {
+                Directory.Delete(candidate, recursive: true);
+                deleted++;
+            }
+            catch { /* best-effort — locked or already gone */ }
+        }
+        return deleted;
+    });
+
+    private bool IsTempFolderInUse(string path)
+    {
+        string normalized = NormalizePath(path);
+        foreach (var item in _items.Values)
+        {
+            if (string.IsNullOrEmpty(item.TempFolderPath)) continue;
+
+            // A cancelled download keeps its TempFolderPath on the item but has
+            // already disowned the chunks — Stop() means discard, unlike Pause().
+            // Its folder only still exists because the delete lost the race with
+            // the connections closing, so it is exactly what this sweep is for.
+            if (item.Status == DownloadStatus.Cancelled) continue;
+
+            if (string.Equals(NormalizePath(item.TempFolderPath), normalized, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    private static string NormalizePath(string path)
+    {
+        try { return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar); }
+        catch { return path; }
+    }
+
     public async Task<DownloadItem> AddDownloadAsync(string url, RemoteFileInfo fileInfo, string saveFolder, string fileName, int connectionsCount)
     {
         Directory.CreateDirectory(saveFolder);

@@ -16,13 +16,22 @@ namespace QuickByte.UI.Controls;
 /// Callers still handle <see cref="ListView.DrawSubItem"/> to paint cell
 /// content, and should use <see cref="SetSubItemText"/> rather than assigning
 /// <c>SubItems[i].Text</c> directly — assigning invalidates the row even when
-/// the text is unchanged.
+/// the text is unchanged. For repaints they should go through
+/// <see cref="InvalidateRow"/> / <see cref="InvalidateCell"/> rather than
+/// <c>Invalidate(row.Bounds)</c>, which silently repaints the *whole control*
+/// when the row has no bounds yet.
 /// </summary>
 public class BufferedListView : ListView
 {
     private const int WmEraseBkgnd = 0x0014;
+    private const int WmHScroll = 0x0114;
+    private const int WmVScroll = 0x0115;
 
-    private int _hoveredIndex = -1;
+    // Tracked as the item itself, not its index: rows are inserted and removed
+    // as downloads change category (see MainForm.SetRowVisible), and a stored
+    // index silently starts pointing at whichever row slid into that slot — so
+    // the highlight jumps to a row the pointer isn't over.
+    private ListViewItem? _hoveredItem;
 
     public BufferedListView()
     {
@@ -61,16 +70,52 @@ public class BufferedListView : ListView
     }
 
     /// <summary>Background for a row, accounting for selection, hover and banding.</summary>
-    public Color RowBackColor(int index, bool selected)
+    public Color RowBackColor(ListViewItem? row, int index, bool selected)
     {
         if (selected) return Focused ? Theme.RowSelected : Theme.RowSelectedInactive;
-        if (index == _hoveredIndex) return Theme.AccentSoft;
+        if (ReferenceEquals(row, _hoveredItem)) return Theme.AccentSoft;
         return index % 2 == 0 ? Theme.Surface : Theme.RowAlt;
     }
 
     /// <summary>Foreground that stays legible on top of <see cref="RowBackColor"/>.</summary>
     public Color RowForeColor(int index, bool selected, Color preferred) =>
         selected && Focused ? Theme.TextOnAccent : preferred;
+
+    /// <summary>
+    /// Repaints one row. Prefer this over <c>Invalidate(row.Bounds)</c>: a row
+    /// that isn't laid out yet has empty bounds, and
+    /// <see cref="Control.Invalidate(Rectangle)"/> treats an empty rectangle as
+    /// "invalidate everything" — one stray call repaints every row in the list.
+    /// </summary>
+    public void InvalidateRow(ListViewItem? row)
+    {
+        var bounds = RowBounds(row);
+        if (!bounds.IsEmpty) Invalidate(bounds);
+    }
+
+    /// <summary>
+    /// Repaints a single cell. Animated progress moves ~60 times a second while
+    /// only one cell's contents change; invalidating the whole row would re-run
+    /// every column's owner-draw — an icon blit and six text runs — over the row
+    /// the pointer is sitting on, which is exactly the churn that reads as
+    /// flicker. Falls back to the full row when the cell has no bounds of its own.
+    /// </summary>
+    public void InvalidateCell(ListViewItem? row, int columnIndex)
+    {
+        if (row?.ListView != this) return;
+        if (columnIndex < 0 || columnIndex >= row.SubItems.Count) { InvalidateRow(row); return; }
+
+        var bounds = row.SubItems[columnIndex].Bounds;
+        if (bounds.Width <= 0 || bounds.Height <= 0) { InvalidateRow(row); return; }
+        Invalidate(bounds);
+    }
+
+    private Rectangle RowBounds(ListViewItem? row)
+    {
+        if (row?.ListView != this) return Rectangle.Empty;
+        var bounds = row.Bounds;
+        return bounds.Width <= 0 || bounds.Height <= 0 ? Rectangle.Empty : bounds;
+    }
 
     protected override void WndProc(ref Message m)
     {
@@ -82,34 +127,57 @@ public class BufferedListView : ListView
             return;
         }
         base.WndProc(ref m);
+
+        // Scrolling moves rows under a stationary pointer, so the hovered row
+        // changes without a single mouse-move arriving. Without this the
+        // highlight stays on the slot rather than the row, then snaps elsewhere
+        // on the next pixel of movement.
+        if (m.Msg is WmVScroll or WmHScroll) RefreshHoverFromCursor();
+    }
+
+    protected override void OnMouseWheel(MouseEventArgs e)
+    {
+        base.OnMouseWheel(e);
+        RefreshHoverFromCursor();
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
-        int index = GetItemAt(e.X, e.Y)?.Index ?? -1;
-        if (index == _hoveredIndex) return;
-
-        int previous = _hoveredIndex;
-        _hoveredIndex = index;
-        InvalidateRow(previous);
-        InvalidateRow(index);
+        SetHovered(GetItemAt(e.X, e.Y));
     }
 
     protected override void OnMouseLeave(EventArgs e)
     {
         base.OnMouseLeave(e);
-        if (_hoveredIndex < 0) return;
 
-        int previous = _hoveredIndex;
-        _hoveredIndex = -1;
-        InvalidateRow(previous);
+        // MouseLeave also fires for things that don't mean the pointer left the
+        // row — the scrollbar or a context menu taking the mouse, a tooltip
+        // appearing over it. Dropping the highlight on those blinks a row the
+        // pointer never left, so confirm it is genuinely outside first.
+        if (IsHandleCreated && ClientRectangle.Contains(PointToClient(Cursor.Position))) return;
+        SetHovered(null);
     }
 
-    private void InvalidateRow(int index)
+    private void RefreshHoverFromCursor()
     {
-        if (index < 0 || index >= Items.Count) return;
-        Invalidate(Items[index].Bounds);
+        if (!IsHandleCreated) return;
+        var point = PointToClient(Cursor.Position);
+        SetHovered(ClientRectangle.Contains(point) ? GetItemAt(point.X, point.Y) : null);
+    }
+
+    private void SetHovered(ListViewItem? row)
+    {
+        if (ReferenceEquals(row, _hoveredItem)) return;
+
+        var previous = _hoveredItem;
+        _hoveredItem = row;
+
+        // Two calls rather than one union rectangle: Windows accumulates the
+        // update area as a region, so the rows between a far-apart pair are
+        // never dragged into the repaint.
+        InvalidateRow(previous);
+        InvalidateRow(row);
     }
 
     protected override void OnDrawColumnHeader(DrawListViewColumnHeaderEventArgs e)
@@ -134,7 +202,7 @@ public class BufferedListView : ListView
 
     protected override void OnDrawItem(DrawListViewItemEventArgs e)
     {
-        using (var back = new SolidBrush(RowBackColor(e.ItemIndex, e.Item?.Selected ?? false)))
+        using (var back = new SolidBrush(RowBackColor(e.Item, e.ItemIndex, e.Item?.Selected ?? false)))
             e.Graphics.FillRectangle(back, e.Bounds);
 
         base.OnDrawItem(e);
