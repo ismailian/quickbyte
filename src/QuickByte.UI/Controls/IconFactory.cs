@@ -252,6 +252,34 @@ public static class IconFactory
         g.DrawLine(pen, size * 0.50f, size * 0.14f, size * 0.50f, size * 0.46f);
     });
 
+    /// <summary>
+    /// Upgrade glyph for Help &gt; Check for Updates and the update window. An
+    /// arrow pointing <em>up</em> out of a filled disc: the download arrows in
+    /// this file all point down, and an update has to read as a different kind
+    /// of transfer at 16 px.
+    /// </summary>
+    public static Bitmap Update(int size = 24) => Canvas(size, g =>
+    {
+        var circle = new RectangleF(size * 0.06f, size * 0.06f, size * 0.88f, size * 0.88f);
+        using (var fill = new LinearGradientBrush(circle, Theme.AccentLight, Theme.Accent, LinearGradientMode.Vertical))
+            g.FillEllipse(fill, circle);
+
+        using var pen = new Pen(Color.White, Math.Max(1.5f, size * 0.10f))
+        {
+            StartCap = LineCap.Round,
+            EndCap = LineCap.Round,
+            LineJoin = LineJoin.Round
+        };
+        float cx = size * 0.50f;
+        g.DrawLine(pen, cx, size * 0.72f, cx, size * 0.32f);
+        g.DrawLines(pen, new PointF[]
+        {
+            new(size * 0.30f, size * 0.51f),
+            new(cx, size * 0.28f),
+            new(size * 0.70f, size * 0.51f)
+        });
+    });
+
     private static void DrawBadge(Graphics g, int size, Color color, bool plus, bool arrow = false)
     {
         var badge = new RectangleF(size * 0.50f, size * 0.50f, size * 0.46f, size * 0.46f);

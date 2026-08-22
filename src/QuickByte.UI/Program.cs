@@ -35,6 +35,7 @@ internal static class Program
 
             var repository = new DownloadRepository();
             var fileInfoProvider = new RemoteFileInfoProvider();
+            IUpdateService updateService = new UpdateService();
             var connectionFactory = new HttpConnectionFactory();
             var fileMerger = new FileMerger();
 
@@ -54,7 +55,7 @@ internal static class Program
             // volume, and nothing on screen depends on the result.
             _ = downloadManager.CleanupOrphanedTempFoldersAsync();
 
-            var mainForm = new MainForm(downloadManager, settingsService);
+            var mainForm = new MainForm(downloadManager, settingsService, updateService);
 
             // The pipe listener raises this on a thread-pool thread, so it goes
             // through the same dispatcher Core's events do rather than touching

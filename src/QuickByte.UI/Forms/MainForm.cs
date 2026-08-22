@@ -37,6 +37,7 @@ public sealed class MainForm : Form
 
     private readonly IDownloadManager _downloadManager;
     private readonly ISettingsService _settingsService;
+    private readonly IUpdateService _updateService;
 
     private readonly Dictionary<Guid, ListViewItem> _rowsById = new();
     private readonly List<ListViewItem> _orderedRows = new();
@@ -74,6 +75,13 @@ public sealed class MainForm : Form
     private ToolStripMenuItem _menuProperties = null!;
     private ToolStripMenuItem _menuRetry = null!;
 
+    /// <summary>
+    /// Held so the manual check can grey itself while it is in flight — the
+    /// request is short but not instant, and a second one would open a second
+    /// update window.
+    /// </summary>
+    private ToolStripMenuItem _menuCheckUpdates = null!;
+
     // Row context-menu entries. Unlike the toolbar these are *hidden* rather
     // than greyed when they don't apply — a right-click menu is read as a list
     // of what you can do here, so an inert Resume on a running download is noise.
@@ -97,10 +105,15 @@ public sealed class MainForm : Form
     /// </summary>
     private bool _exiting;
 
-    public MainForm(IDownloadManager downloadManager, ISettingsService settingsService)
+    /// <summary>Startup update check state — see <see cref="OnShown"/> and <see cref="ShowUpdateWindow"/>.</summary>
+    private bool _startupUpdateCheckDone;
+    private bool _updateWindowOpen;
+
+    public MainForm(IDownloadManager downloadManager, ISettingsService settingsService, IUpdateService updateService)
     {
         _downloadManager = downloadManager;
         _settingsService = settingsService;
+        _updateService = updateService;
 
         BuildUi();
         BuildTrayIcon();
@@ -215,7 +228,11 @@ public sealed class MainForm : Form
         viewMenu.DropDownItems.Add(toolbarToggle);
         viewMenu.DropDownItems.Add(sidebarToggle);
 
+        _menuCheckUpdates = MenuEntry("Check for &Updates...", IconFactory.Update(16), async (_, _) => await CheckForUpdatesAsync());
+
         var helpMenu = new ToolStripMenuItem("&Help");
+        helpMenu.DropDownItems.Add(_menuCheckUpdates);
+        helpMenu.DropDownItems.Add(new ToolStripSeparator());
         helpMenu.DropDownItems.Add("&About QuickByte...", IconFactory.Properties(16), (_, _) => ShowAboutDialog());
 
         // The selection can change without the mouse ever touching a row (a
@@ -239,6 +256,122 @@ public sealed class MainForm : Form
     {
         using var about = new AboutForm();
         about.ShowDialog(this);
+    }
+
+    // ----------------------------------------------------------- Updates --
+
+    /// <summary>
+    /// Fires the background update check once, as the window first appears —
+    /// not from the constructor, because a prompt needs a window to be modal
+    /// over. <see cref="_startupUpdateCheckDone"/> guards it rather than trusting
+    /// OnShown to be a once-per-process event: this form is shown again every
+    /// time it comes back from the tray.
+    /// </summary>
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        if (_startupUpdateCheckDone) return;
+
+        _startupUpdateCheckDone = true;
+        _ = RunStartupUpdateCheckAsync();
+    }
+
+    /// <summary>
+    /// The unattended check. It only ever <em>offers</em> — nothing is
+    /// downloaded until the user says so in <see cref="UpdateForm"/>, and a
+    /// failure is swallowed, because nobody asked for this and an error dialog
+    /// on a launch the user started for some other reason is noise.
+    /// </summary>
+    private async Task RunStartupUpdateCheckAsync()
+    {
+        UpdateCheckResult result;
+        try
+        {
+            result = await _updateService.CheckForUpdateAsync(AppVersion.Display);
+        }
+        catch
+        {
+            return;
+        }
+
+        if (IsDisposed || !result.UpdateAvailable || result.Manifest is null) return;
+        ShowUpdateWindow(result.Manifest, UpdatePromptMode.Prompt);
+    }
+
+    /// <summary>
+    /// Help &gt; Check for Updates. The user asked, so this one reports back
+    /// either way — and when there is an update it goes straight to downloading
+    /// and running the installer rather than asking a question they just
+    /// answered by opening the menu.
+    /// </summary>
+    private async Task CheckForUpdatesAsync()
+    {
+        _menuCheckUpdates.Enabled = false;
+        UseWaitCursor = true;
+
+        UpdateCheckResult? result = null;
+        string? error = null;
+        try
+        {
+            result = await _updateService.CheckForUpdateAsync(AppVersion.Display);
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            // Dropped before anything modal opens: a message box under an
+            // hourglass reads as a window that is still working.
+            if (!IsDisposed)
+            {
+                UseWaitCursor = false;
+                _menuCheckUpdates.Enabled = true;
+            }
+        }
+
+        if (IsDisposed) return;
+
+        if (error is not null)
+        {
+            MessageBox.Show(this, $"Could not check for updates.\n\n{error}",
+                "Check for Updates", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        if (result!.UpdateAvailable && result.Manifest is not null)
+        {
+            ShowUpdateWindow(result.Manifest, UpdatePromptMode.Automatic);
+            return;
+        }
+
+        MessageBox.Show(this, $"QuickByte {AppVersion.Display} is the latest version.",
+            "Check for Updates", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    /// <summary>
+    /// Opens the update window, and closes QuickByte if it got as far as
+    /// starting the installer — setup cannot replace the files this process is
+    /// holding open. The flag stops the startup check and a manual one from
+    /// stacking two windows describing the same release.
+    /// </summary>
+    private void ShowUpdateWindow(UpdateManifest manifest, UpdatePromptMode mode)
+    {
+        if (_updateWindowOpen) return;
+        _updateWindowOpen = true;
+
+        DialogResult outcome;
+        try
+        {
+            using var window = new UpdateForm(_updateService, manifest, AppVersion.Display, mode);
+            outcome = window.ShowDialog(this);
+        }
+        finally
+        {
+            _updateWindowOpen = false;
+        }
+
+        if (outcome == DialogResult.OK) ExitApplication();
     }
 
     private ToolStrip BuildToolStrip()

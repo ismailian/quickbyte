@@ -1,6 +1,7 @@
 ## .NET
 bin/
 obj/
+releases/
 *.user
 .vs/
 src/QuickByte.UI/Properties/

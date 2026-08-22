@@ -18,14 +18,15 @@ src/
     Interfaces/           Contracts for every service (see Architecture below)
     Services/              Concrete implementations
     Helpers/                ByteFormatter, RangeSplitter, SpeedCalculator, RetryPolicy,
-                              FileNameHelper, BandwidthLimiter
+                              FileNameHelper, BandwidthLimiter, ProductVersion
 
   QuickByte.UI/            WinForms application
     Program.cs             Composition root (wires Core services together)
     AppDispatcher.cs        Marshals Core events onto the UI thread
     SingleInstance.cs       Mutex + named pipe: one copy per user, URLs handed to it
     AppVersion.cs           Reads the build's version back off its own assembly
-    Forms/                  MainForm, DownloadDetailsForm, NewDownloadForm, SettingsForm
+    Forms/                  MainForm, DownloadDetailsForm, NewDownloadForm, SettingsForm,
+                              UpdateForm
     Controls/                ListViewProgressPainter, ConnectionSegmentsBar, IconFactory,
                               BrandIcon, IcoWriter (shared owner-draw progress bar, the
                               connection start-position/progress bar, and every toolbar/
@@ -154,6 +155,43 @@ Launching it again (with a URL, say from a browser) hands the link to the
 running window over a named pipe and exits, rather than starting a rival
 download engine.
 
+## Update checker
+
+QuickByte checks for a newer release at every launch, and on demand from
+**Help > Check for Updates**. Both paths read one hardcoded HTTPS endpoint
+(`UpdateService.DefaultManifestUrl`) and expect a small JSON manifest:
+
+```json
+{
+  "version": "1.4.0",
+  "downloadUrl": "https://example.com/releases/QuickByte-1.4.0-Setup.exe",
+  "releaseNotes": "What changed in this release.",
+  "releaseDate": "2026-08-21T09:00:00Z",
+  "fileSizeBytes": 7340032,
+  "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+}
+```
+
+Only `version` and `downloadUrl` are required. Version comparison is done by
+`ProductVersion`, which tolerates a leading `v`, a missing third component and
+a `-prerelease` suffix — and treats `1.4.0` as newer than `1.4.0-beta.1`, so a
+beta build is not offered an "update" to itself.
+
+The two paths differ in exactly one respect, and deliberately:
+
+- **At startup** the check is silent. If it finds something it *offers* it in
+  the update window and downloads nothing until the user clicks Update Now; if
+  the endpoint is unreachable it says nothing at all, because nobody asked.
+- **From the Help menu** the user has already asked, so the same window opens
+  already downloading and runs the installer as soon as it lands. This path
+  also reports back when there is nothing new, or when the check failed.
+
+Once the installer starts, QuickByte closes itself — setup cannot replace files
+the running process holds open. The installer is fetched to
+`%TEMP%/QuickByte/updates`, must be served over HTTPS, and is verified against
+`sha256` when the manifest supplies one; a mismatched or partial download is
+deleted rather than left on disk.
+
 ## Configurable settings
 
 Exposed via **Settings** in the main window toolbar, all settings map
@@ -199,6 +237,9 @@ Every window is styled after classic IDM, on a single flat palette defined in
 - **Add New Download** pre-fills from the clipboard and resolves file
   info (type, size, resumability) before you commit; **Options** groups
   settings into Connection / Folders / Interface tabs.
+- **Update window** — installed version against the offered one, the release
+  notes, and a progress bar for the installer download. The same window serves
+  the startup prompt and a manual check; see Update checker above.
 
 Progress never steps or rewinds: the engine samples every ~100 ms and each
 window interpolates between samples at ~60 fps (`ProgressAnimator<TKey>`,
