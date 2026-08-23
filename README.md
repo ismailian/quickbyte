@@ -1,9 +1,10 @@
 # QuickByte
 
 A C# / WinForms internet download manager, built in the spirit of IDM
-(Internet Download Manager): multi-connection segmented downloads, live
-per-connection progress, pause/resume/retry, and a synchronized UI across
-the main window and any number of open download-detail windows.
+(Internet Download Manager): multi-connection segmented downloads over HTTP,
+HTTPS and FTP, live per-connection progress, pause/resume/retry, and a
+synchronized UI across the main window and any number of open download-detail
+windows. A Chrome extension takes downloads over from the browser.
 
 ## Solution layout
 
@@ -17,8 +18,12 @@ src/
     Events/                Event-arg DTOs used for progress/status/connections/list-changed
     Interfaces/           Contracts for every service (see Architecture below)
     Services/              Concrete implementations
+      Ftp/                    Minimal FTP/FTPS client: control channel, info provider,
+                                segment connection, factory
     Helpers/                ByteFormatter, RangeSplitter, SpeedCalculator, RetryPolicy,
-                              FileNameHelper, BandwidthLimiter, ProductVersion
+                              FileNameHelper, BandwidthLimiter, ProductVersion,
+                              SecretProtector, UrlCredentials
+    Exceptions/             AuthenticationRequiredException
 
   QuickByte.UI/            WinForms application
     Program.cs             Composition root (wires Core services together)
@@ -33,11 +38,19 @@ src/
                               tree/file icon — all drawn with GDI+)
     Assets/                 quickbyte.ico — the one real image file, generated from
                               BrandIcon.cs so the shell icon matches the drawn one
+
+browser/
+  chrome-extension/        Manifest V3 extension: captures Chrome's downloads and
+                             hands them to QuickByte over the loopback bridge
 ```
 
-No third-party NuGet packages are required — everything is built on the
-.NET base class library (`System.Net.Http`, `System.Text.Json`,
-`System.Windows.Forms`).
+One NuGet package, and only at compile time:
+`System.Security.Cryptography.ProtectedData`, so FTP and HTTP passwords are not
+written to disk in plain text. It deploys nothing — `ProtectedData` is missing
+from the `net8.0-windows` targeting pack `QuickByte.Core` builds against, but
+ships inside the `Microsoft.WindowsDesktop.App` framework the app runs on.
+Everything else is the base class library (`System.Net.Http`,
+`System.Net.Sockets`, `System.Text.Json`, `System.Windows.Forms`).
 
 ## Building and running
 
@@ -76,10 +89,14 @@ to Core's events. This means the download engine could be reused headless
 
 **The download pipeline, top to bottom:**
 
-1. **`IRemoteFileInfoProvider`** (`RemoteFileInfoProvider`) — resolves file
-   name, size, content type, and Range-request support via a HEAD request,
+1. **`IRemoteFileInfoProvider`** (`ProtocolFileInfoProvider`) — resolves file
+   name, size, content type, and segment support, dispatching on the URL's
+   scheme. `RemoteFileInfoProvider` handles HTTP(S) with a HEAD request,
    falling back to a ranged GET probe (`bytes=0-0`) for servers that reject
-   HEAD.
+   HEAD; `FtpFileInfoProvider` logs in and asks `SIZE`, `MDTM` and `FEAT`. A
+   `401` or an FTP `530` is reported as `AuthenticationRequiredException`
+   rather than a generic failure, which is what turns the Add Download
+   dialog's error line into a credentials prompt.
 2. **`IDownloadManager`** (`DownloadManager`) — the facade/registry every
    window talks to. Owns every `IDownloadService`, persists the download
    list to JSON, throttles concurrent downloads with a `SemaphoreSlim`, and
@@ -97,10 +114,14 @@ to Core's events. This means the download engine could be reused headless
    progress events off a `Timer` (default every 300 ms) rather than
    forwarding every connection's raw byte events — this is what keeps the
    UI smooth regardless of how many connections are active.
-5. **`IDownloadConnection`** (`DownloadConnection`) — downloads exactly one
-   byte range into its own temp `.tmp` chunk file via an HTTP `Range`
-   request. Fully independent of its siblings; retries transient failures
-   internally using `RetryPolicy` (Strategy pattern, exponential backoff).
+5. **`IDownloadConnection`** (`DownloadConnection` / `FtpDownloadConnection`)
+   — downloads exactly one byte range into its own temp `.tmp` chunk file:
+   over HTTP with a `Range` request, over FTP with `REST` plus a byte count
+   (FTP can only be told where to *start*, so the segment's end is enforced
+   by closing the data connection). Fully independent of its siblings;
+   retries transient failures internally using `RetryPolicy` (Strategy
+   pattern, exponential backoff), which deliberately does not retry a
+   rejected password.
 6. **`IFileMerger`** (`FileMerger`) — once every connection finishes,
    concatenates the ordered chunk files into the final destination file
    and cleans up the temp folder.
@@ -192,6 +213,88 @@ the running process holds open. The installer is fetched to
 `sha256` when the manifest supplies one; a mismatched or partial download is
 deleted rather than left on disk.
 
+## Protocols and authentication
+
+`ProtocolFileInfoProvider` and `ProtocolConnectionFactory` pick an
+implementation from the URL's scheme, so nothing further down the pipeline
+knows which protocol answered — the pool splits a range and runs N workers
+either way.
+
+**FTP** (`Core/Services/Ftp/`) is a small client written directly on
+`TcpClient`: `FtpControlChannel` connects, logs in (anonymously when no
+credentials are given), switches to binary, and opens a passive data
+connection with `PASV`, or `EPSV` over IPv6. `ftps://` negotiates explicit TLS
+(`AUTH TLS`, then `PBSZ 0` / `PROT P` so the data channel is encrypted too).
+The BCL's `FtpWebRequest` was not used: it has been obsolete since .NET 6 with
+no non-obsolete way to construct one, and it hides whether the server actually
+honoured `REST` — without which resume writes bytes at the wrong offset and
+corrupts the file silently. Segmented FTP therefore depends on `FEAT`
+advertising `REST STREAM`; when it doesn't, the download drops to a single
+connection, and a partial chunk that cannot be continued is discarded and
+refetched rather than appended to.
+
+**Passive-mode note:** the IP address in a `227` reply is ignored in favour of
+the host the control connection already reached. Servers behind NAT routinely
+announce a private address there, and dialling it is the classic "passive mode
+hangs forever" failure.
+
+**HTTP Basic** is sent pre-emptively rather than after a `401`: every
+connection shares one static `HttpClient`, so `HttpClientHandler.Credentials`
+is not available, and presenting the header up front also saves a round trip
+on each of up to 32 connections.
+
+Credentials live on the `DownloadItem`, so a download paused for three days
+still presents the same login when it resumes. The password is **never written
+to `downloads.json` in the clear**: `DownloadCredentials.Password` is
+`[JsonIgnore]`d and the serialized `ProtectedPassword` is encrypted with DPAPI
+(`SecretProtector`, `CurrentUser` scope, plus an app-specific entropy value).
+A profile copied to another machine simply gets an empty password back and is
+asked again — decryption failing is not a reason to refuse to start. This is
+the one and only NuGet reference in the solution
+(`System.Security.Cryptography.ProtectedData`), needed to compile against
+`ProtectedData` and deploying nothing at all.
+
+A `user:password@host` URL is split apart the moment it is entered
+(`UrlCredentials`), so the secret ends up in the field that encrypts itself
+rather than in `DownloadItem.Url`, which is persisted, displayed and logged.
+
+## Browser integration
+
+`BrowserIntegrationServer` (Core) listens on **127.0.0.1** and answers two
+routes: `GET /ping` and `POST /download`. The Chrome extension in
+`browser/chrome-extension/` cancels a download Chrome is about to start and
+posts it here instead, along with the cookies, referrer and user agent Chrome
+would have used — which is usually the only reason a link from behind a login
+resolves to a file rather than a sign-in page. `MainForm` opens the Add
+Download dialog pre-filled and already fetching.
+
+It is a raw `TcpListener` rather than `HttpListener`: http.sys URL
+reservations are an administrator-level concept, and a download manager that
+needs an elevated prompt to talk to a browser extension is not shippable. A
+loopback socket needs no permission from anyone.
+
+Everything on the machine can reach a loopback port, including every web page
+in the browser, so three things guard it:
+
+- **The bind address** is `IPAddress.Loopback`; nothing off-machine connects.
+- **A pairing token** must be present as `X-QuickByte-Token` on every request,
+  compared in fixed time. It is generated on first use, shown in
+  *Options → Browser*, and pasted into the extension's options page. A page
+  can send a request whose answer it cannot read, so the secret has to be in
+  the request itself.
+- **The origin** must be `chrome-extension://` or `moz-extension://` for any
+  CORS header to be issued, so an ordinary page's JSON `POST` never survives
+  its preflight.
+
+QuickByte's installer offers the extension rather than shipping it: it writes a
+Chrome *external extension* registry entry pointing at the Web Store, so Chrome
+raises its own "New extension added" prompt at the next launch — the same
+mechanism Adobe and IDM use. No app can install a Chrome extension silently
+without enterprise policy, and QuickByte deliberately doesn't try.
+
+See `browser/chrome-extension/README.md` for pairing and
+`browser/chrome-extension/STORE.md` for publishing.
+
 ## Configurable settings
 
 Exposed via **Settings** in the main window toolbar, all settings map
@@ -209,6 +312,13 @@ directly to `DownloadSettings`:
 | Temp folder (chunk files) | OS temp + `QuickByte` |
 | Open the details window automatically | on |
 | Show the download complete window | on |
+| Browser integration | on |
+| Browser bridge port | 1024–65535, default 9614 |
+| Browser pairing token | generated on first use |
+
+Two of these are honoured **live** rather than at the next download: the
+global speed limit, and browser integration (enabling it, or moving its port,
+takes effect on Save). Everything else is snapshotted — see `CLAUDE.md`.
 
 ## UI
 
@@ -260,7 +370,9 @@ This is a complete, working reference implementation, not a byte-for-byte
 IDM clone. A few things a production build would add:
 - A signed installer.
 - Scheduling (start/stop a queue at a given time).
-- Browser integration (link capture).
+- HTTP authentication schemes beyond Basic (Digest, NTLM, negotiate).
+- A packed, store-published browser extension — the one in `browser/` is
+  loaded unpacked, and only Chrome's hooks are wired.
 - Automated tests (the interface-driven design makes the Core layer easy
   to unit test with fakes — `IConnectionFactory` and `IDownloadConnection`
   in particular are there specifically to make the pool manager testable

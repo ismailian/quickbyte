@@ -158,23 +158,27 @@ public sealed class DownloadManager : IDownloadManager
         catch { return path; }
     }
 
-    public async Task<DownloadItem> AddDownloadAsync(string url, RemoteFileInfo fileInfo, string saveFolder, string fileName, int connectionsCount)
+    public async Task<DownloadItem> AddDownloadAsync(DownloadRequest request)
     {
-        Directory.CreateDirectory(saveFolder);
-        string safeName = FileNameHelper.SanitizeFileName(fileName);
-        string finalPath = FileNameHelper.GetAvailableFilePath(saveFolder, safeName);
+        Directory.CreateDirectory(request.SaveFolder);
+        string safeName = FileNameHelper.SanitizeFileName(request.FileName);
+        string finalPath = FileNameHelper.GetAvailableFilePath(request.SaveFolder, safeName);
 
         var item = new DownloadItem
         {
-            Url = url,
+            Url = request.Url,
             FileName = Path.GetFileName(finalPath),
-            SaveFolder = saveFolder,
-            ContentType = fileInfo.ContentType,
-            TotalBytes = fileInfo.ContentLength,
-            ConnectionsCount = _settingsService.Current.ClampConnections(connectionsCount),
-            SupportsResume = fileInfo.SupportsRangeRequests,
+            SaveFolder = request.SaveFolder,
+            ContentType = request.FileInfo.ContentType,
+            TotalBytes = request.FileInfo.ContentLength,
+            ConnectionsCount = _settingsService.Current.ClampConnections(request.ConnectionsCount),
+            SupportsResume = request.FileInfo.SupportsRangeRequests,
             Status = DownloadStatus.Queued,
-            TempFolderPath = Path.Combine(_settingsService.Current.TempFolder, Guid.NewGuid().ToString("N"))
+            TempFolderPath = Path.Combine(_settingsService.Current.TempFolder, Guid.NewGuid().ToString("N")),
+            Credentials = request.Credentials?.Clone(),
+            Headers = request.Headers is null
+                ? new Dictionary<string, string>()
+                : new Dictionary<string, string>(request.Headers, StringComparer.OrdinalIgnoreCase)
         };
 
         _items[item.Id] = item;

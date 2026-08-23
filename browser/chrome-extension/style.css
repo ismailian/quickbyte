@@ -1,0 +1,174 @@
+/* Kept close to QuickByte's own flat palette (see UI/Controls/Theme.cs) so the
+   extension reads as part of the same product rather than a stock options page. */
+
+:root {
+  --surface: #ffffff;
+  --header: #f9fafc;
+  --border: #dfe5ec;
+  --text: #1e252e;
+  --muted: #707b88;
+  --accent: #0072c6;
+  --accent-dark: #005498;
+  --ok: #209856;
+  --bad: #cd4444;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font: 13px/1.5 "Segoe UI", system-ui, sans-serif;
+  color: var(--text);
+  background: var(--header);
+}
+
+.page {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 24px 20px 40px;
+}
+
+.header h1 {
+  margin: 0 0 4px;
+  font-size: 20px;
+}
+
+.muted {
+  color: var(--muted);
+  margin: 0;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px 18px;
+  margin-top: 18px;
+}
+
+.card h2 {
+  margin: 0 0 12px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.field {
+  display: block;
+  margin-bottom: 12px;
+}
+
+.field > span {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.field--narrow input {
+  width: 120px;
+}
+
+input[type="text"],
+input[type="number"],
+textarea {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+}
+
+textarea {
+  resize: vertical;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12px;
+}
+
+input:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.row--end {
+  justify-content: flex-end;
+}
+
+button {
+  padding: 6px 14px;
+  border: 1px solid #c8d1db;
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #e8f2fc;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent-dark);
+  color: #fff;
+}
+
+button.primary:hover {
+  background: #4aa3e7;
+}
+
+.status {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.status--ok {
+  color: var(--ok);
+}
+
+.status--bad {
+  color: var(--bad);
+}
+
+/* --- popup ------------------------------------------------------------- */
+
+.popup {
+  width: 260px;
+  padding: 14px;
+  background: var(--surface);
+}
+
+.popup__title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.popup .status {
+  margin-bottom: 12px;
+}
+
+.popup button {
+  width: 100%;
+}

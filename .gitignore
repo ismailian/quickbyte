@@ -10,6 +10,10 @@ src/QuickByte.UI/Properties/
 .idea/
 .vscode/
 
+## Extension packaging
+browser/dist/
+extensions/
+
 ## Inno
 Output/
-QuickByte App Packager.iss
+AppPackager.iss

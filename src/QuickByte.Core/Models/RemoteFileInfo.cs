@@ -15,5 +15,13 @@ public sealed class RemoteFileInfo
     public DateTimeOffset? LastModified { get; set; }
     public string FinalUrl { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Set when the server answered the probe with a challenge (HTTP 401, FTP
+    /// 530) instead of metadata. The Add Download dialog reads it to swap its
+    /// "could not fetch" message for a credentials prompt, which is the only
+    /// thing that will actually get the user any further.
+    /// </summary>
+    public bool RequiresAuthentication { get; set; }
+
     public bool HasKnownSize => ContentLength > 0;
 }

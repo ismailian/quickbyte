@@ -1,6 +1,8 @@
 using System.Threading;
+using System.Net;
 using System.Net.Http;
 using QuickByte.Core.Enums;
+using QuickByte.Core.Exceptions;
 using QuickByte.Core.Helpers;
 using QuickByte.Core.Interfaces;
 using QuickByte.Core.Models;
@@ -20,6 +22,7 @@ public sealed class DownloadConnection : IDownloadConnection
     private readonly string _url;
     private readonly DownloadSettings _settings;
     private readonly IBandwidthLimiter _bandwidthLimiter;
+    private readonly RequestOptions? _options;
     private long _bytesDownloaded;
     private int _retryCount;
     private volatile ConnectionStatus _status = ConnectionStatus.Idle;
@@ -47,9 +50,11 @@ public sealed class DownloadConnection : IDownloadConnection
         long alreadyDownloaded,
         string chunkFilePath,
         DownloadSettings settings,
-        IBandwidthLimiter? bandwidthLimiter = null)
+        IBandwidthLimiter? bandwidthLimiter = null,
+        RequestOptions? options = null)
     {
         _httpClient = httpClient;
+        _options = options;
         ConnectionId = connectionId;
         _url = url;
         RangeStart = rangeStart;
@@ -92,10 +97,23 @@ public sealed class DownloadConnection : IDownloadConnection
 
         using var request = new HttpRequestMessage(HttpMethod.Get, _url);
         request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(start, RangeEnd);
+        HttpRequestDecorator.Apply(request, _options);
 
         using var response = await _httpClient
             .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
             .ConfigureAwait(false);
+
+        // Separated from the generic failure below so RetryPolicy stops rather
+        // than spending its attempts re-presenting the same rejected password.
+        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.ProxyAuthenticationRequired)
+        {
+            throw new AuthenticationRequiredException(
+                _options?.HasCredentials == true
+                    ? "The server rejected the supplied user name or password."
+                    : "The server requires a user name and password.")
+            { CredentialsWereSupplied = _options?.HasCredentials == true };
+        }
+
         response.EnsureSuccessStatusCode();
 
         _status = ConnectionStatus.ReceivingData;

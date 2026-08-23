@@ -14,6 +14,11 @@ public interface IConnectionFactory
     /// transfer as a whole rather than to each segment separately. Null means
     /// no throttling.
     /// </param>
+    /// <param name="options">
+    /// Credentials and extra headers for this download; see
+    /// <see cref="RequestOptions"/>. Every connection of a download gets the
+    /// same instance.
+    /// </param>
     IDownloadConnection Create(
         int connectionId,
         string url,
@@ -22,5 +27,6 @@ public interface IConnectionFactory
         long alreadyDownloaded,
         string chunkFilePath,
         DownloadSettings settings,
-        IBandwidthLimiter? bandwidthLimiter = null);
+        IBandwidthLimiter? bandwidthLimiter = null,
+        RequestOptions? options = null);
 }

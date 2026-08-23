@@ -1,29 +1,52 @@
 using System.Drawing;
 using System.Windows.Forms;
+using QuickByte.Core.Exceptions;
 using QuickByte.Core.Helpers;
 using QuickByte.Core.Interfaces;
 using QuickByte.Core.Models;
-using QuickByte.Core.Services;
 using QuickByte.UI.Controls;
 
 namespace QuickByte.UI.Forms;
 
 /// <summary>
-/// "Add Download" dialog. Lets the user paste a URL, fetches file info (name,
-/// size, content type, range support) via <see cref="IRemoteFileInfoProvider"/>,
-/// and lets them adjust the save name/folder and connection count (1–32)
-/// before handing everything back to <see cref="MainForm"/> as a
-/// <see cref="NewDownloadResult"/>. Pre-fills from the clipboard the way a
-/// download manager is expected to.
+/// "Add Download" dialog. Lets the user paste an http(s) or ftp(s) URL, fetches
+/// file info (name, size, content type, range support) via
+/// <see cref="IRemoteFileInfoProvider"/>, and lets them adjust the save
+/// name/folder, the connection count (1–32) and the server login before handing
+/// everything back to <see cref="MainForm"/> as a <see cref="DownloadRequest"/>.
+/// Pre-fills from the clipboard the way a download manager is expected to.
+///
+/// The login fields are part of the *fetch*, not just of the download: a probe
+/// that isn't authenticated resolves the size of a 401 body or an FTP error, so
+/// credentials have to be in place before Fetch Info can say anything true.
 /// </summary>
 public sealed class NewDownloadForm : Form
 {
     private readonly ISettingsService _settingsService;
-    private readonly IRemoteFileInfoProvider _fileInfoProvider = new RemoteFileInfoProvider();
+    private readonly IRemoteFileInfoProvider _fileInfoProvider;
+
+    /// <summary>
+    /// Headers captured alongside a link handed over by the browser extension
+    /// (cookie, referrer, user agent). Carried through the fetch and into the
+    /// finished request unchanged — they are frequently the only reason the URL
+    /// resolves to a file rather than a sign-in page.
+    /// </summary>
+    private readonly IReadOnlyDictionary<string, string>? _capturedHeaders;
+
+    /// <summary>
+    /// The file name Chrome already resolved for a captured download. It outranks
+    /// whatever the fetch derives, because the browser followed the redirects and
+    /// read the Content-Disposition that our probe may never see. Null for a URL
+    /// the user typed, where each fetch is free to refresh the name.
+    /// </summary>
+    private readonly string? _preferredFileName;
 
     private TextBox _urlTextBox = null!;
     private Button _fetchButton = null!;
     private Label _statusLabel = null!;
+    private CheckBox _useLoginCheckBox = null!;
+    private TextBox _userNameTextBox = null!;
+    private TextBox _passwordTextBox = null!;
     private TextBox _fileNameTextBox = null!;
     private TextBox _saveFolderTextBox = null!;
     private Label _fileTypeLabel = null!;
@@ -34,7 +57,7 @@ public sealed class NewDownloadForm : Form
 
     private RemoteFileInfo? _fetchedInfo;
 
-    public NewDownloadResult? Result { get; private set; }
+    public DownloadRequest? Result { get; private set; }
 
     /// <param name="initialUrl">
     /// A link to open the dialog on — supplied when QuickByte is launched with a
@@ -42,26 +65,69 @@ public sealed class NewDownloadForm : Form
     /// It wins over the clipboard: an explicit argument is a stronger signal
     /// about what the user wants than whatever they last copied.
     /// </param>
-    public NewDownloadForm(ISettingsService settingsService, string? initialUrl = null)
+    /// <param name="captured">
+    /// A download the browser extension took over. Supplies the same URL plus
+    /// Chrome's own file name, size and request headers, so the dialog opens
+    /// already knowing what the browser knew.
+    /// </param>
+    public NewDownloadForm(
+        ISettingsService settingsService,
+        IRemoteFileInfoProvider fileInfoProvider,
+        string? initialUrl = null,
+        CapturedDownload? captured = null)
     {
         _settingsService = settingsService;
+        _fileInfoProvider = fileInfoProvider;
+        _capturedHeaders = captured?.ToHeaders();
+        _preferredFileName = string.IsNullOrWhiteSpace(captured?.FileName)
+            ? null
+            : FileNameHelper.SanitizeFileName(captured!.FileName!);
+
         BuildUi();
 
-        if (string.IsNullOrWhiteSpace(initialUrl))
+        string? url = captured?.Url ?? initialUrl;
+        if (string.IsNullOrWhiteSpace(url))
         {
             PrefillFromClipboard();
             return;
         }
 
-        _urlTextBox.Text = initialUrl.Trim();
-        _statusLabel.Text = "Opened with a link — click Fetch Info to check it.";
+        ApplySeed(url.Trim(), captured);
+    }
+
+    /// <summary>
+    /// Fills the dialog from a link that arrived from outside — a command line, a
+    /// second launch, or the browser extension — and starts the fetch without
+    /// waiting to be asked. The user did not type this URL; making them click
+    /// Fetch Info to confirm a link they already chose in the browser is a step
+    /// with no decision in it.
+    /// </summary>
+    private void ApplySeed(string url, CapturedDownload? captured)
+    {
+        // A password embedded in the URL moves into the login fields rather than
+        // staying in the address: DownloadItem.Url is persisted and displayed,
+        // and the credential field is the only one that encrypts itself.
+        var split = UrlCredentials.Extract(url);
+        _urlTextBox.Text = split.Url;
+
+        if (split.Credentials is not null)
+        {
+            _useLoginCheckBox.Checked = true;
+            _userNameTextBox.Text = split.Credentials.UserName;
+            _passwordTextBox.Text = split.Credentials.Password;
+        }
+
+        if (_preferredFileName is not null) _fileNameTextBox.Text = _preferredFileName;
+
+        SetStatus("Checking the link…", Theme.TextMuted);
+        _ = OnFetchClickedAsync();
     }
 
     private void BuildUi()
     {
         Text = "Add New Download";
         Width = 580;
-        Height = 520;
+        Height = 566;
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -72,7 +138,7 @@ public sealed class NewDownloadForm : Form
 
         Controls.Add(BuildBody());
         Controls.Add(BuildFooter());
-        Controls.Add(FormChrome.Header("Add New Download", "Paste a link, then choose where it lands.", IconFactory.AddUrl(40)));
+        Controls.Add(FormChrome.Header("Add New Download", "Paste an HTTP or FTP link, then choose where it lands.", IconFactory.AddUrl(40)));
     }
 
     private Panel BuildBody()
@@ -86,7 +152,7 @@ public sealed class NewDownloadForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 3,
-            RowCount = 7,
+            RowCount = 8,
             BackColor = Theme.Surface,
             AutoSize = false
         };
@@ -94,10 +160,10 @@ public sealed class NewDownloadForm : Form
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
 
-        // Address · status · info card · save as · save to · connections, then a
-        // percent-sized filler — without it the last real row swallows all the
-        // leftover height and its label floats out of line with its field.
-        foreach (int height in new[] { 38, 26, 80, 38, 38, 38 })
+        // Address · status · login · info card · save as · save to · connections,
+        // then a percent-sized filler — without it the last real row swallows all
+        // the leftover height and its label floats out of line with its field.
+        foreach (int height in new[] { 38, 26, 34, 80, 38, 38, 38 })
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
@@ -123,6 +189,13 @@ public sealed class NewDownloadForm : Form
         };
         layout.Controls.Add(_statusLabel, 1, row);
         layout.SetColumnSpan(_statusLabel, 2);
+        row++;
+
+        // --- Login ------------------------------------------------------------
+        layout.Controls.Add(FormChrome.FieldLabel("Login"), 0, row);
+        var loginRow = BuildLoginRow();
+        layout.Controls.Add(loginRow, 1, row);
+        layout.SetColumnSpan(loginRow, 2);
         row++;
 
         // --- Resolved file info card -----------------------------------------
@@ -193,6 +266,54 @@ public sealed class NewDownloadForm : Form
         return body;
     }
 
+    private FlowLayoutPanel BuildLoginRow()
+    {
+        var loginRow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            BackColor = Theme.Surface,
+            WrapContents = false,
+            Margin = new Padding(0, 2, 0, 0)
+        };
+
+        _useLoginCheckBox = new CheckBox
+        {
+            Text = "Sign in",
+            AutoSize = true,
+            Font = Theme.Ui,
+            ForeColor = Theme.Text,
+            BackColor = Theme.Surface,
+            Margin = new Padding(0, 5, 10, 0)
+        };
+
+        _userNameTextBox = LoginField("User name", 140);
+        _passwordTextBox = LoginField("Password", 140);
+        _passwordTextBox.UseSystemPasswordChar = true;
+
+        _useLoginCheckBox.CheckedChanged += (_, _) =>
+        {
+            _userNameTextBox.Enabled = _passwordTextBox.Enabled = _useLoginCheckBox.Checked;
+            if (_useLoginCheckBox.Checked) _userNameTextBox.Focus();
+        };
+        _userNameTextBox.Enabled = _passwordTextBox.Enabled = false;
+
+        loginRow.Controls.Add(_useLoginCheckBox);
+        loginRow.Controls.Add(_userNameTextBox);
+        loginRow.Controls.Add(_passwordTextBox);
+        return loginRow;
+    }
+
+    private static TextBox LoginField(string placeholder, int width)
+    {
+        var field = FormChrome.Field();
+        field.Dock = DockStyle.None;
+        field.Width = width;
+        field.PlaceholderText = placeholder;
+        field.Margin = new Padding(0, 3, 8, 0);
+        return field;
+    }
+
     private Panel BuildFooter()
     {
         var footer = FormChrome.Footer();
@@ -214,14 +335,15 @@ public sealed class NewDownloadForm : Form
     }
 
     /// <summary>
-    /// Enter in the address box fetches instead of activating the dialog's
-    /// accept button. A single-line TextBox never sees Enter as a KeyDown when
-    /// the form has an AcceptButton — it is swallowed by dialog-key handling —
-    /// so the shortcut has to be claimed here.
+    /// Enter in the address or login boxes fetches instead of activating the
+    /// dialog's accept button. A single-line TextBox never sees Enter as a
+    /// KeyDown when the form has an AcceptButton — it is swallowed by dialog-key
+    /// handling — so the shortcut has to be claimed here.
     /// </summary>
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
-        if (keyData == Keys.Enter && _urlTextBox.Focused && _fetchButton.Enabled)
+        bool inFetchField = _urlTextBox.Focused || _userNameTextBox.Focused || _passwordTextBox.Focused;
+        if (keyData == Keys.Enter && inFetchField && _fetchButton.Enabled)
         {
             _ = OnFetchClickedAsync();
             return true;
@@ -235,7 +357,7 @@ public sealed class NewDownloadForm : Form
         {
             if (!Clipboard.ContainsText()) return;
             string text = Clipboard.GetText().Trim();
-            if (Uri.TryCreate(text, UriKind.Absolute, out var uri) && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+            if (Uri.TryCreate(text, UriKind.Absolute, out var uri) && IsSupportedScheme(uri))
             {
                 _urlTextBox.Text = text;
                 _statusLabel.Text = "Pasted a link from the clipboard — click Fetch Info to check it.";
@@ -244,12 +366,44 @@ public sealed class NewDownloadForm : Form
         catch { /* clipboard can be locked by another app */ }
     }
 
+    private static bool IsSupportedScheme(Uri uri) =>
+        uri.Scheme is "http" or "https" or "ftp" or "ftps";
+
+    private RequestOptions CurrentRequestOptions() => new()
+    {
+        Credentials = CurrentCredentials(),
+        Headers = _capturedHeaders
+    };
+
+    private DownloadCredentials? CurrentCredentials()
+    {
+        if (!_useLoginCheckBox.Checked) return null;
+
+        var credentials = new DownloadCredentials
+        {
+            UserName = _userNameTextBox.Text.Trim(),
+            Password = _passwordTextBox.Text
+        };
+        return credentials.IsEmpty ? null : credentials;
+    }
+
     private async Task OnFetchClickedAsync()
     {
-        string url = _urlTextBox.Text.Trim();
-        if (!Uri.TryCreate(url, UriKind.Absolute, out _))
+        // A URL typed with credentials in it is split here too, not just on the
+        // seeded path — people paste ftp://user:pass@host links by hand.
+        var split = UrlCredentials.Extract(_urlTextBox.Text.Trim());
+        if (split.Credentials is not null)
         {
-            SetStatus("Please enter a valid, absolute URL.", Theme.Danger);
+            _urlTextBox.Text = split.Url;
+            _useLoginCheckBox.Checked = true;
+            _userNameTextBox.Text = split.Credentials.UserName;
+            _passwordTextBox.Text = split.Credentials.Password;
+        }
+
+        string url = split.Url;
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || !IsSupportedScheme(uri))
+        {
+            SetStatus("Please enter a valid http, https, ftp or ftps URL.", Theme.Danger);
             return;
         }
 
@@ -259,9 +413,16 @@ public sealed class NewDownloadForm : Form
 
         try
         {
-            _fetchedInfo = await _fileInfoProvider.GetFileInfoAsync(url);
+            var info = await _fileInfoProvider.GetFileInfoAsync(url, CurrentRequestOptions());
 
-            _fileNameTextBox.Text = _fetchedInfo.FileName;
+            // The seeded path starts this fetch from the constructor, so a user
+            // who cancels while "Checking the link..." is on screen resumes here
+            // against a disposed form. Every continuation below checks first.
+            if (IsDisposed || Disposing) return;
+            _fetchedInfo = info;
+
+            _fileNameTextBox.Text = _preferredFileName ?? _fetchedInfo.FileName;
+
             _fileTypeLabel.Text = _fetchedInfo.ContentType;
             _fileSizeLabel.Text = _fetchedInfo.HasKnownSize ? ByteFormatter.FormatBytes(_fetchedInfo.ContentLength) : "Unknown";
             _rangeSupportLabel.Text = _fetchedInfo.SupportsRangeRequests
@@ -275,15 +436,39 @@ public sealed class NewDownloadForm : Form
             SetStatus("File info retrieved successfully.", Theme.Success);
             _okButton.Enabled = true;
         }
+        catch (AuthenticationRequiredException ex)
+        {
+            // The one failure with an obvious next step, so it gets one: the login
+            // fields open and take focus instead of the user reading a generic
+            // "could not retrieve file info" and guessing.
+            if (IsDisposed || Disposing) return;
+            OnAuthenticationRequired(ex);
+        }
         catch (Exception ex)
         {
+            if (IsDisposed || Disposing) return;
             SetStatus($"Could not retrieve file info: {ex.Message}", Theme.Danger);
             _okButton.Enabled = false;
         }
         finally
         {
-            _fetchButton.Enabled = true;
+            if (!IsDisposed && !Disposing) _fetchButton.Enabled = true;
         }
+    }
+
+    private void OnAuthenticationRequired(AuthenticationRequiredException exception)
+    {
+        _fetchedInfo = null;
+        _okButton.Enabled = false;
+        _useLoginCheckBox.Checked = true;
+
+        SetStatus($"{exception.Message} Enter it below and fetch again.", Theme.Warning);
+
+        var focusTarget = exception.CredentialsWereSupplied && _userNameTextBox.Text.Length > 0
+            ? _passwordTextBox
+            : _userNameTextBox;
+        focusTarget.Focus();
+        focusTarget.SelectAll();
     }
 
     private void SetStatus(string text, Color color)
@@ -297,11 +482,6 @@ public sealed class NewDownloadForm : Form
         using var dialog = new FolderBrowserDialog { SelectedPath = _saveFolderTextBox.Text };
         if (dialog.ShowDialog(this) == DialogResult.OK)
             _saveFolderTextBox.Text = dialog.SelectedPath;
-    }
-
-    private void InitializeComponent()
-    {
-
     }
 
     private void OnOkClicked()
@@ -318,17 +498,18 @@ public sealed class NewDownloadForm : Form
             return;
         }
 
-        Result = new NewDownloadResult(
+        Result = new DownloadRequest(
             _urlTextBox.Text.Trim(),
             _fetchedInfo,
             _saveFolderTextBox.Text.Trim(),
             _fileNameTextBox.Text.Trim(),
-            (int)_connectionsUpDown.Value);
+            (int)_connectionsUpDown.Value)
+        {
+            Credentials = CurrentCredentials(),
+            Headers = _capturedHeaders
+        };
 
         DialogResult = DialogResult.OK;
         Close();
     }
 }
-
-/// <summary>Result payload handed back to <see cref="MainForm"/> when the user confirms a new download.</summary>
-public sealed record NewDownloadResult(string Url, RemoteFileInfo FileInfo, string SaveFolder, string FileName, int ConnectionsCount);

@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>QuickByte Integration — Options</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body class="page">
+    <header class="header">
+      <h1>QuickByte Integration</h1>
+      <p class="muted">
+        Downloads Chrome starts are handed to QuickByte instead. Pair the two by
+        pasting the token from <strong>QuickByte → Tasks → Options → Browser</strong>.
+      </p>
+    </header>
+
+    <main>
+      <section class="card">
+        <h2>Connection</h2>
+
+        <label class="field">
+          <span>Pairing token</span>
+          <input id="token" type="text" spellcheck="false" autocomplete="off"
+                 placeholder="Paste the token from QuickByte's Browser options" />
+        </label>
+
+        <label class="field field--narrow">
+          <span>Bridge port</span>
+          <input id="port" type="number" min="1024" max="65535" />
+        </label>
+
+        <div class="row">
+          <button id="test" type="button">Test connection</button>
+          <span id="status" class="status"></span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>What to take over</h2>
+
+        <label class="check">
+          <input id="enabled" type="checkbox" />
+          <span>Send downloads to QuickByte</span>
+        </label>
+
+        <label class="check">
+          <input id="captureTypes" type="radio" name="capture" value="types" />
+          <span>Only these file types</span>
+        </label>
+
+        <label class="check">
+          <input id="captureAll" type="radio" name="capture" value="all" />
+          <span>Every download Chrome starts</span>
+        </label>
+
+        <label class="field">
+          <span>File types</span>
+          <textarea id="fileTypes" rows="3" spellcheck="false"></textarea>
+        </label>
+
+        <label class="field">
+          <span>Never capture from these sites</span>
+          <textarea id="excluded" rows="3" spellcheck="false"
+                    placeholder="one host per line, e.g. mail.example.com"></textarea>
+        </label>
+      </section>
+
+      <div class="row row--end">
+        <span id="saved" class="status"></span>
+        <button id="save" type="button" class="primary">Save</button>
+      </div>
+    </main>
+
+    <script src="shared.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>

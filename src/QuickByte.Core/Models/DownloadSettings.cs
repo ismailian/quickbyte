@@ -10,6 +10,13 @@ public sealed class DownloadSettings
     public const int MaxConnections = 32;
     public const int DefaultConnections = 8;
 
+    /// <summary>
+    /// Default loopback port for the browser bridge. Deliberately high and
+    /// unassigned by IANA, so it doesn't collide with something the user is
+    /// likely to already be running.
+    /// </summary>
+    public const int DefaultBrowserIntegrationPort = 9614;
+
     /// <summary>Default number of simultaneous connections for new downloads (1-32).</summary>
     public int DefaultConnectionsCount { get; set; } = DefaultConnections;
 
@@ -47,6 +54,26 @@ public sealed class DownloadSettings
     /// <see cref="Services.DownloadManager"/>.
     /// </summary>
     public long GlobalSpeedLimitBytesPerSecond { get; set; }
+
+    /// <summary>
+    /// Whether the loopback bridge the browser extension talks to is listening.
+    /// Honoured live, like the global speed limit — see
+    /// <see cref="Services.BrowserIntegrationServer"/>.
+    /// </summary>
+    public bool BrowserIntegrationEnabled { get; set; } = true;
+
+    /// <summary>Loopback port for that bridge. Must match the extension's setting.</summary>
+    public int BrowserIntegrationPort { get; set; } = DefaultBrowserIntegrationPort;
+
+    /// <summary>
+    /// Shared secret the extension presents on every request. Generated on first
+    /// use rather than defaulted, since a fixed default would be no secret at
+    /// all — every QuickByte install would accept every install's extension.
+    /// Not sensitive enough for <see cref="Helpers.SecretProtector"/>: it only
+    /// unlocks a prompt on this machine, and it has to be readable to be pasted
+    /// into a browser.
+    /// </summary>
+    public string BrowserIntegrationToken { get; set; } = string.Empty;
 
     /// <summary>Pop the download details window open as soon as a download is added.</summary>
     public bool AutoOpenDetailsWindow { get; set; } = true;

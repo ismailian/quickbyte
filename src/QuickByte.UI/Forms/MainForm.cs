@@ -38,6 +38,8 @@ public sealed class MainForm : Form
     private readonly IDownloadManager _downloadManager;
     private readonly ISettingsService _settingsService;
     private readonly IUpdateService _updateService;
+    private readonly IRemoteFileInfoProvider _fileInfoProvider;
+    private readonly IBrowserIntegrationService _browserIntegration;
 
     private readonly Dictionary<Guid, ListViewItem> _rowsById = new();
     private readonly List<ListViewItem> _orderedRows = new();
@@ -109,11 +111,18 @@ public sealed class MainForm : Form
     private bool _startupUpdateCheckDone;
     private bool _updateWindowOpen;
 
-    public MainForm(IDownloadManager downloadManager, ISettingsService settingsService, IUpdateService updateService)
+    public MainForm(
+        IDownloadManager downloadManager,
+        ISettingsService settingsService,
+        IUpdateService updateService,
+        IRemoteFileInfoProvider fileInfoProvider,
+        IBrowserIntegrationService browserIntegration)
     {
         _downloadManager = downloadManager;
         _settingsService = settingsService;
         _updateService = updateService;
+        _fileInfoProvider = fileInfoProvider;
+        _browserIntegration = browserIntegration;
 
         BuildUi();
         BuildTrayIcon();
@@ -1127,14 +1136,26 @@ public sealed class MainForm : Form
         BringToFront();
     }
 
-    private async void OnAddDownloadClicked(string? initialUrl = null)
+    /// <summary>
+    /// Called when the browser extension hands over a link it intercepted.
+    /// Already marshaled onto the UI thread by <see cref="Program"/>, exactly as
+    /// a second launch is — the bridge raises its event on a thread-pool thread.
+    /// </summary>
+    public void HandleCapturedDownload(CapturedDownload captured)
     {
-        using var dialog = new NewDownloadForm(_settingsService, initialUrl);
+        // Surfaced first: the click that produced this happened in the browser,
+        // so the dialog would otherwise open behind whatever the user is looking
+        // at and the download would sit unstarted.
+        RestoreAndActivate();
+        OnAddDownloadClicked(captured: captured);
+    }
+
+    private async void OnAddDownloadClicked(string? initialUrl = null, CapturedDownload? captured = null)
+    {
+        using var dialog = new NewDownloadForm(_settingsService, _fileInfoProvider, initialUrl, captured);
         if (dialog.ShowDialog(this) != DialogResult.OK || dialog.Result is null) return;
 
-        var result = dialog.Result;
-        await _downloadManager.AddDownloadAsync(
-            result.Url, result.FileInfo, result.SaveFolder, result.FileName, result.ConnectionsCount);
+        await _downloadManager.AddDownloadAsync(dialog.Result);
     }
 
     /// <summary>
@@ -1236,7 +1257,7 @@ public sealed class MainForm : Form
 
     private void OnSettingsClicked()
     {
-        using var settingsForm = new SettingsForm(_settingsService);
+        using var settingsForm = new SettingsForm(_settingsService, _browserIntegration);
         settingsForm.ShowDialog(this);
     }
 

@@ -20,6 +20,14 @@ namespace QuickByte.UI.Forms;
 public sealed class SettingsForm : Form
 {
     private readonly ISettingsService _settingsService;
+    private readonly IBrowserIntegrationService _browserIntegration;
+
+    /// <summary>
+    /// Owned rather than created inline: a ToolTip is a component with a native
+    /// window behind it, and one built in a helper and dropped on the floor
+    /// outlives the dialog it belongs to.
+    /// </summary>
+    private readonly ToolTip _tips = new();
 
     private NumericUpDown _defaultConnectionsUpDown = null!;
     private NumericUpDown _maxRetriesUpDown = null!;
@@ -31,12 +39,19 @@ public sealed class SettingsForm : Form
     private TextBox _tempFolderTextBox = null!;
     private CheckBox _autoOpenDetailsCheckBox = null!;
     private CheckBox _showCompletionCheckBox = null!;
+    private CheckBox _browserIntegrationCheckBox = null!;
+    private NumericUpDown _browserPortUpDown = null!;
+    private TextBox _browserTokenTextBox = null!;
+    private Label _browserStatusLabel = null!;
 
-    public SettingsForm(ISettingsService settingsService)
+    public SettingsForm(ISettingsService settingsService, IBrowserIntegrationService browserIntegration)
     {
         _settingsService = settingsService;
+        _browserIntegration = browserIntegration;
         BuildUi();
         LoadValues();
+
+        FormClosed += (_, _) => _tips.Dispose();
     }
 
     private void BuildUi()
@@ -57,6 +72,7 @@ public sealed class SettingsForm : Form
         BuildConnectionTab(tabs.AddPage("Connection"));
         BuildFoldersTab(tabs.AddPage("Folders"));
         BuildInterfaceTab(tabs.AddPage("Interface"));
+        BuildBrowserTab(tabs.AddPage("Browser"));
 
         Controls.Add(tabs);
         Controls.Add(BuildFooter());
@@ -121,6 +137,110 @@ public sealed class SettingsForm : Form
         _showCompletionCheckBox = AddCheckRow(layout, row++,
             "Show the download complete window when a download finishes");
 
+    }
+
+    /// <summary>
+    /// Pairing surface for the browser extension. The token lives here rather
+    /// than being negotiated per browser because the bridge is a plain loopback
+    /// socket: every process on the machine can reach it, so the extension has
+    /// to prove it is the one the user paired, and a secret the user carries
+    /// across themselves is the only handshake that needs no second executable.
+    /// </summary>
+    private void BuildBrowserTab(Panel page)
+    {
+        var layout = NewGrid(page, rows: 4);
+        int row = 0;
+
+        _browserIntegrationCheckBox = AddCheckRow(layout, row++,
+            "Let the browser extension send downloads to QuickByte");
+
+        _browserPortUpDown = AddNumericRow(layout, row++,
+            "Bridge port (127.0.0.1)",
+            "Must match the port set in the extension. Applies at once.",
+            1024, 65535);
+
+        _browserTokenTextBox = AddTokenRow(layout, row++);
+
+        _browserStatusLabel = AddStatusRow(layout, row,
+            "New token",
+            "Issues a new secret and unpairs every browser using the old one.",
+            (_, _) =>
+            {
+                _browserTokenTextBox.Text = _browserIntegration.RegenerateToken();
+                UpdateBrowserStatus();
+            });
+    }
+
+    private TextBox AddTokenRow(TableLayoutPanel layout, int row)
+    {
+        // A short hint on purpose: unlike the numeric rows, this caption gets only
+        // the 200px first column — the token field needs the second — so anything
+        // longer wraps and is clipped by the row height.
+        layout.Controls.Add(CaptionBlock("Pairing token", "Paste into the extension."), 0, row);
+
+        var field = FormChrome.Field();
+        field.Margin = new Padding(0, 12, 8, 0);
+        field.ReadOnly = true;
+        field.Font = Theme.Mono;
+        field.BackColor = Theme.HeaderBack;
+        layout.Controls.Add(field, 1, row);
+
+        var copy = Theme.StyleButton(new Button { Text = "Copy", Anchor = AnchorStyles.Right, Margin = new Padding(0, 10, 0, 0) });
+        copy.Click += (_, _) =>
+        {
+            // Clipboard.SetText throws on an empty string, and can fail outright
+            // while another app holds the clipboard open. Neither is worth a
+            // dialog over a convenience button.
+            try { if (field.TextLength > 0) Clipboard.SetText(field.Text); } catch { /* best-effort */ }
+        };
+        layout.Controls.Add(copy, 2, row);
+        return field;
+    }
+
+    /// <summary>A live status line with an action button on the right of the same row.</summary>
+    private Label AddStatusRow(TableLayoutPanel layout, int row, string buttonText, string hint, EventHandler onClick)
+    {
+        var status = new Label
+        {
+            Dock = DockStyle.Fill,
+            ForeColor = Theme.TextMuted,
+            Font = Theme.UiSmall,
+            TextAlign = ContentAlignment.MiddleLeft,
+            AutoEllipsis = true,
+            Margin = new Padding(0, 12, 8, 0)
+        };
+        layout.Controls.Add(status, 0, row);
+        layout.SetColumnSpan(status, 2);
+
+        var button = Theme.StyleButton(new Button { Text = buttonText, Anchor = AnchorStyles.Right, Margin = new Padding(0, 10, 0, 0) });
+        button.Click += onClick;
+        _tips.SetToolTip(button, hint);
+        layout.Controls.Add(button, 2, row);
+        return status;
+    }
+
+    private void UpdateBrowserStatus()
+    {
+        if (!_browserIntegrationCheckBox.Checked)
+        {
+            _browserStatusLabel.Text = "Bridge off - the extension will report QuickByte as unavailable.";
+            _browserStatusLabel.ForeColor = Theme.TextMuted;
+            return;
+        }
+
+        if (_browserIntegration.IsRunning)
+        {
+            _browserStatusLabel.Text = $"Listening on 127.0.0.1:{_browserIntegration.Port}.";
+            _browserStatusLabel.ForeColor = Theme.Success;
+            return;
+        }
+
+        // Nearly always the port being taken. Said plainly, because the fix is a
+        // different number in the box directly above.
+        _browserStatusLabel.Text = _browserIntegration.LastError is null
+            ? "Not listening yet."
+            : $"Could not listen: {_browserIntegration.LastError}";
+        _browserStatusLabel.ForeColor = Theme.Danger;
     }
 
     // ------------------------------------------------------------ Grid bits --
@@ -258,6 +378,16 @@ public sealed class SettingsForm : Form
         _tempFolderTextBox.Text = s.TempFolder;
         _autoOpenDetailsCheckBox.Checked = s.AutoOpenDetailsWindow;
         _showCompletionCheckBox.Checked = s.ShowCompletionWindow;
+
+        _browserIntegrationCheckBox.Checked = s.BrowserIntegrationEnabled;
+        _browserPortUpDown.Value = Math.Clamp(s.BrowserIntegrationPort, 1024, 65535);
+
+        // Reading the property is what mints the token on a fresh install, so the
+        // field is never blank by the time anyone looks at it.
+        _browserTokenTextBox.Text = _browserIntegration.Token;
+
+        _browserIntegrationCheckBox.CheckedChanged += (_, _) => UpdateBrowserStatus();
+        UpdateBrowserStatus();
     }
 
     private void Browse(TextBox target)
@@ -295,6 +425,12 @@ public sealed class SettingsForm : Form
             TempFolder = _tempFolderTextBox.Text.Trim(),
             AutoOpenDetailsWindow = _autoOpenDetailsCheckBox.Checked,
             ShowCompletionWindow = _showCompletionCheckBox.Checked,
+            BrowserIntegrationEnabled = _browserIntegrationCheckBox.Checked,
+            BrowserIntegrationPort = (int)_browserPortUpDown.Value,
+            // Read back from Current rather than from the read-only field: the
+            // New token button has already persisted its own value, and the
+            // field only mirrors it.
+            BrowserIntegrationToken = _settingsService.Current.BrowserIntegrationToken,
             // No UI field — carried forward explicitly so it doesn't reset.
             StreamBufferSizeBytes = _settingsService.Current.StreamBufferSizeBytes
         };

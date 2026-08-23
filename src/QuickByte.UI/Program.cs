@@ -34,9 +34,14 @@ internal static class Program
             settingsService.Load();
 
             var repository = new DownloadRepository();
-            var fileInfoProvider = new RemoteFileInfoProvider();
+
+            // The protocol pair, and they must stay a pair: whichever provider
+            // resolves a URL's size, the matching factory has to be the one that
+            // then fetches it. See ProtocolFileInfoProvider.
+            IRemoteFileInfoProvider fileInfoProvider = new ProtocolFileInfoProvider();
+            var connectionFactory = new ProtocolConnectionFactory();
+
             IUpdateService updateService = new UpdateService();
-            var connectionFactory = new HttpConnectionFactory();
             var fileMerger = new FileMerger();
 
             // Explicitly install a WinForms sync context so background threads
@@ -55,13 +60,25 @@ internal static class Program
             // volume, and nothing on screen depends on the result.
             _ = downloadManager.CleanupOrphanedTempFoldersAsync();
 
-            var mainForm = new MainForm(downloadManager, settingsService, updateService);
+            using IBrowserIntegrationService browserIntegration = new BrowserIntegrationServer(settingsService);
+
+            var mainForm = new MainForm(downloadManager, settingsService, updateService, fileInfoProvider, browserIntegration);
 
             // The pipe listener raises this on a thread-pool thread, so it goes
             // through the same dispatcher Core's events do rather than touching
             // a control directly.
             singleInstance.SecondInstanceStarted += (_, payload) =>
                 dispatcher.Post(() => mainForm.HandleSecondInstance(payload));
+
+            // Same story for the browser bridge: its accept loop is on the thread
+            // pool, and the handler opens a dialog.
+            browserIntegration.DownloadCaptured += (_, captured) =>
+                dispatcher.Post(() => mainForm.HandleCapturedDownload(captured));
+
+            // After the subscription, so a capture that lands during startup is
+            // not raised into nothing. A failure to bind is recorded on the
+            // service and shown in Options; it must not stop the app.
+            browserIntegration.Start();
 
             // A URL passed to the *first* launch still deserves the Add dialog.
             string? startupUrl = SingleInstance.FindUrl(args);

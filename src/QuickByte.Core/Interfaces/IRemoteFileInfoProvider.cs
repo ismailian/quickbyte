@@ -10,5 +10,12 @@ namespace QuickByte.Core.Interfaces;
 /// </summary>
 public interface IRemoteFileInfoProvider
 {
-    Task<RemoteFileInfo> GetFileInfoAsync(string url, CancellationToken cancellationToken = default);
+    /// <param name="options">
+    /// Credentials and headers to probe with. The probe has to speak to the
+    /// server exactly the way the connections will, or it resolves the size of
+    /// something the download then never sees — a login page, or a 401 body.
+    /// Pass <see cref="RequestOptions.None"/> for an anonymous, header-free
+    /// request.
+    /// </param>
+    Task<RemoteFileInfo> GetFileInfoAsync(string url, RequestOptions? options = null, CancellationToken cancellationToken = default);
 }

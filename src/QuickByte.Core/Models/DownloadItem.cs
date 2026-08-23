@@ -25,6 +25,38 @@ public sealed class DownloadItem
     public bool SupportsResume { get; set; }
 
     /// <summary>
+    /// Login for the server this file comes from, or null for anonymous access.
+    /// Persisted with the password encrypted — see <see cref="DownloadCredentials"/>.
+    /// It has to live on the item rather than only on the request that created
+    /// it: a paused download resumed three days later has to present the same
+    /// login, and so does every retry.
+    /// </summary>
+    public DownloadCredentials? Credentials { get; set; }
+
+    /// <summary>
+    /// Extra request headers, currently only ever populated by the browser
+    /// extension (cookie, referrer, user agent). Same reasoning as
+    /// <see cref="Credentials"/>: a session cookie that resolved the link at
+    /// capture time is what lets the resume three minutes later fetch the same
+    /// bytes rather than a login page.
+    /// </summary>
+    /// <remarks>
+    /// The setter coalesces because this is deserialized state. A property
+    /// initializer only survives a member that is *absent* from the JSON — an
+    /// explicit <c>"Headers": null</c> overwrites it, and every read here is on
+    /// the path a persisted download takes when it resumes. The rest of the load
+    /// path already prefers an empty default to failing startup; this keeps that
+    /// promise for one more field.
+    /// </remarks>
+    public Dictionary<string, string> Headers
+    {
+        get => _headers;
+        set => _headers = value ?? new Dictionary<string, string>();
+    }
+
+    private Dictionary<string, string> _headers = new();
+
+    /// <summary>
     /// Cap for this download alone, in bytes per second; <c>0</c> means
     /// unlimited. Persisted, so a limit set on a big download survives a pause
     /// or an app restart rather than quietly reverting to full speed.
@@ -48,6 +80,13 @@ public sealed class DownloadItem
 
     public string FullPath => Path.Combine(SaveFolder, FileName);
     public string TempFolderPath { get; set; } = string.Empty;
+
+    /// <summary>Bundles the two fields above into the shape the engine takes.</summary>
+    public RequestOptions ToRequestOptions() => new()
+    {
+        Credentials = Credentials,
+        Headers = Headers.Count > 0 ? Headers : null
+    };
 
     public double ProgressPercentage =>
         TotalBytes <= 0 ? 0 : Math.Min(100.0, (double)DownloadedBytes / TotalBytes * 100.0);

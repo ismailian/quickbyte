@@ -89,12 +89,17 @@ public sealed class ConnectionPoolManager : IConnectionPoolManager
     {
         var connections = new List<IDownloadConnection>(connectionsCount);
 
+        // Resolved once and shared: every connection of a download must present
+        // the same login and the same captured headers, or the segments come
+        // back from different things.
+        var options = item.ToRequestOptions();
+
         if (connectionsCount == 1 || !fileInfo.HasKnownSize)
         {
             string chunkPath = Path.Combine(item.TempFolderPath, "part0.tmp");
             long already = File.Exists(chunkPath) ? new FileInfo(chunkPath).Length : 0;
             long end = fileInfo.HasKnownSize ? fileInfo.ContentLength - 1 : long.MaxValue - 1;
-            connections.Add(_connectionFactory.Create(0, item.Url, 0, end, already, chunkPath, settings, _bandwidthLimiter));
+            connections.Add(_connectionFactory.Create(0, item.Url, 0, end, already, chunkPath, settings, _bandwidthLimiter, options));
             return connections;
         }
 
@@ -103,7 +108,7 @@ public sealed class ConnectionPoolManager : IConnectionPoolManager
         {
             string chunkPath = Path.Combine(item.TempFolderPath, $"part{i}.tmp");
             long already = File.Exists(chunkPath) ? new FileInfo(chunkPath).Length : 0;
-            connections.Add(_connectionFactory.Create(i, item.Url, ranges[i].Start, ranges[i].End, already, chunkPath, settings, _bandwidthLimiter));
+            connections.Add(_connectionFactory.Create(i, item.Url, ranges[i].Start, ranges[i].End, already, chunkPath, settings, _bandwidthLimiter, options));
         }
         return connections;
     }

@@ -20,7 +20,7 @@ public interface IDownloadManager
     event EventHandler<DownloadStatusChangedEventArgs>? StatusChanged;
     event EventHandler<ConnectionsSnapshotEventArgs>? ConnectionsChanged;
 
-    Task<DownloadItem> AddDownloadAsync(string url, RemoteFileInfo fileInfo, string saveFolder, string fileName, int connectionsCount);
+    Task<DownloadItem> AddDownloadAsync(DownloadRequest request);
 
     IDownloadService? GetService(Guid downloadId);
 

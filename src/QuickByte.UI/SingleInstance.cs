@@ -112,15 +112,20 @@ public sealed class SingleInstance : IDisposable
     }
 
     /// <summary>
-    /// Extracts the first absolute http(s) URL from a command line, ignoring
+    /// Extracts the first absolute download URL from a command line, ignoring
     /// switches and anything that is not a link. Used both to decide what a
     /// second launch should hand over and to validate what arrives.
     /// </summary>
+    /// <remarks>
+    /// The scheme list is the same one the Add dialog accepts, FTP included —
+    /// an ftp:// link handed over by the shell has to reach the dialog rather
+    /// than being silently dropped as "not a URL".
+    /// </remarks>
     public static string? FindUrl(IEnumerable<string> arguments) =>
         arguments.Select(argument => argument.Trim().Trim('"'))
                  .FirstOrDefault(argument =>
                      Uri.TryCreate(argument, UriKind.Absolute, out var uri) &&
-                     (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps));
+                     uri.Scheme is "http" or "https" or "ftp" or "ftps");
 
     public void Dispose()
     {

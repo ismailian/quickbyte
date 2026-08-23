@@ -67,7 +67,9 @@ public sealed class DownloadService : IDownloadService
             _cts = new CancellationTokenSource();
             SetStatus(DownloadStatus.Connecting);
 
-            _lastFileInfo ??= await _fileInfoProvider.GetFileInfoAsync(Item.Url, _cts.Token).ConfigureAwait(false);
+            _lastFileInfo ??= await _fileInfoProvider
+                .GetFileInfoAsync(Item.Url, Item.ToRequestOptions(), _cts.Token)
+                .ConfigureAwait(false);
             Item.TotalBytes = _lastFileInfo.HasKnownSize ? _lastFileInfo.ContentLength : Item.TotalBytes;
             Item.SupportsResume = _lastFileInfo.SupportsRangeRequests;
             Item.ContentType = _lastFileInfo.ContentType;

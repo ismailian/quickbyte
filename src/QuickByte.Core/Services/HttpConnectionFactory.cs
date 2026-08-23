@@ -20,7 +20,12 @@ public sealed class HttpConnectionFactory : IConnectionFactory
         var handler = new SocketsHttpHandler
         {
             MaxConnectionsPerServer = DownloadSettings.MaxConnections + 4,
-            PooledConnectionLifetime = TimeSpan.FromMinutes(10)
+            PooledConnectionLifetime = TimeSpan.FromMinutes(10),
+
+            // The browser extension hands us the page's own Cookie header, and a
+            // container that also injects its own would leave two Cookie sources
+            // fighting over one request. Nothing here needs a cookie jar.
+            UseCookies = false
         };
         var client = new HttpClient(handler)
         {
@@ -38,10 +43,11 @@ public sealed class HttpConnectionFactory : IConnectionFactory
         long alreadyDownloaded,
         string chunkFilePath,
         DownloadSettings settings,
-        IBandwidthLimiter? bandwidthLimiter = null)
+        IBandwidthLimiter? bandwidthLimiter = null,
+        RequestOptions? options = null)
     {
         return new DownloadConnection(
             SharedClient, connectionId, url, rangeStart, rangeEnd, alreadyDownloaded, chunkFilePath,
-            settings, bandwidthLimiter);
+            settings, bandwidthLimiter, options);
     }
 }
