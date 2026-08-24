@@ -33,6 +33,11 @@ internal static class Program
             var settingsService = new SettingsService();
             settingsService.Load();
 
+            // Re-asserts the Run key entry against this executable's current
+            // path, so "start with Windows" survives an update or a move. Silent
+            // and best-effort: nobody asked for it on this launch.
+            StartupRegistration.Sync(settingsService.Current.StartWithWindows);
+
             var repository = new DownloadRepository();
 
             // The protocol pair, and they must stay a pair: whichever provider
@@ -62,7 +67,15 @@ internal static class Program
 
             using IBrowserIntegrationService browserIntegration = new BrowserIntegrationServer(settingsService);
 
-            var mainForm = new MainForm(downloadManager, settingsService, updateService, fileInfoProvider, browserIntegration);
+            // A launch that goes straight to the notification area, either
+            // because the user asked for it in Options or because whatever
+            // started us said so on the command line. The switch is what lets an
+            // auto-start entry be quiet while a hand-launch still opens a window,
+            // if the user ever wants to split the two.
+            bool startMinimized = settingsService.Current.StartMinimized || HasMinimizedSwitch(args);
+
+            var mainForm = new MainForm(
+                downloadManager, settingsService, updateService, fileInfoProvider, browserIntegration, startMinimized);
 
             // The pipe listener raises this on a thread-pool thread, so it goes
             // through the same dispatcher Core's events do rather than touching
@@ -80,12 +93,27 @@ internal static class Program
             // service and shown in Options; it must not stop the app.
             browserIntegration.Start();
 
-            // A URL passed to the *first* launch still deserves the Add dialog.
+            // A URL passed to the *first* launch still deserves the Add window.
             string? startupUrl = SingleInstance.FindUrl(args);
             if (startupUrl is not null)
                 dispatcher.Post(() => mainForm.HandleSecondInstance(startupUrl));
+            else if (startMinimized)
+                // Posted rather than called: the balloon belongs to the message
+                // loop, which has not started yet. A launch that puts nothing on
+                // screen is indistinguishable from one that failed, so it says
+                // where it went.
+                dispatcher.Post(mainForm.NotifyStartedMinimized);
 
             Application.Run(mainForm);
         }
     }
+
+    /// <summary>
+    /// <c>--minimized</c> / <c>-m</c> on the command line, for anything that
+    /// wants a quiet launch without the setting being on — a shortcut, a
+    /// scheduled task, or a test run.
+    /// </summary>
+    private static bool HasMinimizedSwitch(IEnumerable<string> args) =>
+        args.Any(argument => argument.Trim().Trim('"')
+            is "--minimized" or "-minimized" or "/minimized" or "-m");
 }

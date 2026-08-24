@@ -128,10 +128,15 @@ public sealed class NewDownloadForm : Form
         Text = "Add New Download";
         Width = 580;
         Height = 566;
-        StartPosition = FormStartPosition.CenterParent;
+        // Shown modeless and unowned by MainForm, so it is a window in its own
+        // right: it gets a taskbar button, it can be minimised out of the way
+        // while the fetch runs, and CenterParent would have no parent to centre
+        // on. MainForm positions it.
+        StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
-        MinimizeBox = false;
+        MinimizeBox = true;
+        ShowInTaskbar = true;
         BackColor = Theme.Surface;
         Font = Theme.Ui;
         Icon = BrandIcon.App;
@@ -324,6 +329,9 @@ public sealed class NewDownloadForm : Form
         _okButton.Click += (_, _) => OnOkClicked();
 
         var cancelButton = Theme.StyleButton(new Button { Text = "Cancel", DialogResult = DialogResult.Cancel });
+        // Closed explicitly: a DialogResult only closes the form by itself while
+        // it is modal, and this one is not.
+        cancelButton.Click += (_, _) => Close();
 
         buttons.Controls.Add(_okButton);
         buttons.Controls.Add(cancelButton);

@@ -98,8 +98,28 @@ public sealed class MainForm : Form
 
     private TrayIconController _trayIcon = null!;
 
+    /// <summary>
+    /// Every secondary window this one has opened — details, completion and Add
+    /// Download windows. None of them is <em>owned</em> by this form (that is
+    /// what made them ride along with it: an owned window is always on top of
+    /// its owner, follows it to the tray, and cannot be reached from the taskbar
+    /// on its own), so tracking them here is what still allows
+    /// <see cref="HideToTray"/> to put the whole application away in one gesture.
+    /// Entries remove themselves on close.
+    /// </summary>
+    private readonly List<Form> _childWindows = new();
+
     /// <summary>Windows taken down by <see cref="HideToTray"/>, to be put back when the window returns.</summary>
-    private readonly List<Form> _hiddenOwnedForms = new();
+    private readonly List<Form> _hiddenChildWindows = new();
+
+    /// <summary>
+    /// Set for a launch that is meant to go straight to the notification area —
+    /// see <see cref="SetVisibleCore"/>. Cleared the moment it has been honoured.
+    /// </summary>
+    private bool _startHidden;
+
+    /// <summary>Set when <see cref="_startHidden"/> was honoured — see <see cref="SetVisibleCore"/>.</summary>
+    private bool _centreOnFirstShow;
 
     /// <summary>
     /// Set only by <see cref="ExitApplication"/>. Until then the close button is
@@ -116,13 +136,15 @@ public sealed class MainForm : Form
         ISettingsService settingsService,
         IUpdateService updateService,
         IRemoteFileInfoProvider fileInfoProvider,
-        IBrowserIntegrationService browserIntegration)
+        IBrowserIntegrationService browserIntegration,
+        bool startMinimized = false)
     {
         _downloadManager = downloadManager;
         _settingsService = settingsService;
         _updateService = updateService;
         _fileInfoProvider = fileInfoProvider;
         _browserIntegration = browserIntegration;
+        _startHidden = startMinimized;
 
         BuildUi();
         BuildTrayIcon();
@@ -266,6 +288,44 @@ public sealed class MainForm : Form
         using var about = new AboutForm();
         about.ShowDialog(this);
     }
+
+    // -------------------------------------------------- Visibility --
+
+    /// <summary>
+    /// Honours "start minimized". <see cref="Application.Run(Form)"/> shows its
+    /// main form itself, so intercepting the first visibility change is the only
+    /// way to start with nothing on screen. The handle is created by hand
+    /// because a window that is never shown never creates one, and the message
+    /// loop — and with it the tray icon's menu — needs one to exist.
+    /// </summary>
+    protected override void SetVisibleCore(bool value)
+    {
+        if (_startHidden)
+        {
+            _startHidden = false;
+            _centreOnFirstShow = true;
+            if (!IsHandleCreated) CreateHandle();
+            value = false;
+        }
+        else if (value && _centreOnFirstShow)
+        {
+            // StartPosition is spent during handle creation, and the handle above
+            // was created off screen — so the first real show would otherwise put
+            // the window wherever Windows felt like, not in the middle.
+            _centreOnFirstShow = false;
+            CenterToScreen();
+        }
+
+        base.SetVisibleCore(value);
+    }
+
+    /// <summary>
+    /// Says out loud that a launch which put nothing on screen still started
+    /// something. Called by <see cref="Program"/> through the dispatcher, so the
+    /// balloon is raised from the message loop rather than from the middle of
+    /// startup.
+    /// </summary>
+    public void NotifyStartedMinimized() => _trayIcon.NotifyStartedMinimized();
 
     // ----------------------------------------------------------- Updates --
 
@@ -935,7 +995,7 @@ public sealed class MainForm : Form
         if (!_settingsService.Current.ShowCompletionWindow) return;
 
         var completeForm = new DownloadCompleteForm(item, _settingsService);
-        completeForm.Show(this);
+        ShowIndependently(completeForm);
     }
 
     // --------------------------------------------------------------- Rows --
@@ -1100,7 +1160,56 @@ public sealed class MainForm : Form
         var detailsForm = new DownloadDetailsForm(item, _downloadManager);
         detailsForm.FormClosed += (_, _) => _openDetailForms.Remove(item.Id);
         _openDetailForms[item.Id] = detailsForm;
-        detailsForm.Show(this);
+        ShowIndependently(detailsForm, CascadeStep(_openDetailForms.Count - 1));
+    }
+
+    /// <summary>
+    /// Shows a secondary window as a window in its own right: no owner, its own
+    /// taskbar button, and no obligation to appear alongside the main window.
+    /// That is the whole point — the main window is frequently in the tray when
+    /// one of these opens (a tray command, a browser capture, a download
+    /// finishing), and an owned window drags it back on screen with it.
+    ///
+    /// The list keeps <see cref="HideToTray"/> able to put everything away at
+    /// once, which ownership used to do for free.
+    /// </summary>
+    private void ShowIndependently(Form window, int cascade = 0)
+    {
+        _childWindows.Add(window);
+        window.FormClosed += (_, _) =>
+        {
+            _childWindows.Remove(window);
+            _hiddenChildWindows.Remove(window);
+        };
+
+        window.StartPosition = FormStartPosition.CenterScreen;
+        window.Show();
+
+        // After Show(), so it offsets the position CenterScreen just worked out;
+        // several windows opened together would otherwise land in one stack.
+        if (cascade != 0)
+            window.Location = new Point(window.Location.X + cascade, window.Location.Y + cascade);
+
+        ForceToForeground(window);
+    }
+
+    /// <summary>Diagonal offset for the n-th window of a kind, wrapped so a long session does not walk off screen.</summary>
+    private static int CascadeStep(int index) => index <= 0 ? 0 : (index % 6) * 28;
+
+    /// <summary>
+    /// Pulls a just-opened window to the front. A process that is not already in
+    /// the foreground cannot simply take focus — Windows flashes its taskbar
+    /// button instead — and these windows routinely open while the browser, not
+    /// QuickByte, is the foreground app. Asserting TopMost for an instant is what
+    /// gets through without a P/Invoke to AllowSetForegroundWindow.
+    /// </summary>
+    private static void ForceToForeground(Form window)
+    {
+        window.Activate();
+        bool wasTopMost = window.TopMost;
+        window.TopMost = true;
+        window.TopMost = wasTopMost;
+        window.BringToFront();
     }
 
     /// <summary>
@@ -1111,10 +1220,19 @@ public sealed class MainForm : Form
     /// </summary>
     public void HandleSecondInstance(string payload)
     {
-        RestoreAndActivate();
-
         string? url = SingleInstance.FindUrl(new[] { payload });
-        if (url is not null) OnAddDownloadClicked(url);
+        if (url is not null)
+        {
+            // The launch carried a link, so what the user asked for is the Add
+            // window — which now stands on its own. Dragging the main window out
+            // of the tray as well would be answering a question nobody asked.
+            OnAddDownloadClicked(url);
+            return;
+        }
+
+        // A bare second launch is someone double-clicking the icon of an app they
+        // could not see. That one means "show me the window".
+        RestoreAndActivate();
     }
 
     private void RestoreAndActivate()
@@ -1123,17 +1241,8 @@ public sealed class MainForm : Form
             WindowState = FormWindowState.Normal;
 
         Show();
-        RestoreHiddenOwnedForms();
-        Activate();
-
-        // A process that isn't already in the foreground can't simply take focus
-        // — Windows flashes the taskbar button instead. Asserting TopMost for an
-        // instant pulls the window up without a P/Invoke to
-        // AllowSetForegroundWindow, which is the only other way through.
-        bool wasTopMost = TopMost;
-        TopMost = true;
-        TopMost = wasTopMost;
-        BringToFront();
+        RestoreHiddenChildWindows();
+        ForceToForeground(this);
     }
 
     /// <summary>
@@ -1143,19 +1252,38 @@ public sealed class MainForm : Form
     /// </summary>
     public void HandleCapturedDownload(CapturedDownload captured)
     {
-        // Surfaced first: the click that produced this happened in the browser,
-        // so the dialog would otherwise open behind whatever the user is looking
-        // at and the download would sit unstarted.
-        RestoreAndActivate();
+        // Only the Add window comes up. The click that produced this happened in
+        // the browser and the user is still looking at it — pulling the whole
+        // application onto the screen to ask one question is more than was asked
+        // for. ShowIndependently pulls that one window to the front, which is the
+        // part that mattered.
         OnAddDownloadClicked(captured: captured);
     }
 
-    private async void OnAddDownloadClicked(string? initialUrl = null, CapturedDownload? captured = null)
+    /// <summary>
+    /// Opens Add Download as an independent, modeless window rather than a modal
+    /// dialog. Modal was wrong on both counts: it locked every other QuickByte
+    /// window while it was up, and — reached from the tray or from a browser
+    /// capture — it needed the main window on screen behind it to have anywhere
+    /// to be modal over. The request is picked up when the window closes.
+    ///
+    /// More than one may be open at a time on purpose: each browser capture
+    /// arrives with its own URL, and queuing them behind a single window would
+    /// lose every link but the first.
+    /// </summary>
+    private void OnAddDownloadClicked(string? initialUrl = null, CapturedDownload? captured = null)
     {
-        using var dialog = new NewDownloadForm(_settingsService, _fileInfoProvider, initialUrl, captured);
-        if (dialog.ShowDialog(this) != DialogResult.OK || dialog.Result is null) return;
+        var dialog = new NewDownloadForm(_settingsService, _fileInfoProvider, initialUrl, captured);
+        dialog.FormClosed += (_, _) =>
+        {
+            // Result is only ever set on the OK path, so its presence *is* the
+            // user's confirmation. Not awaited: AddDownloadAsync completes when
+            // the download does, and this handler is the end of a window's life.
+            if (dialog.Result is not null)
+                _ = _downloadManager.AddDownloadAsync(dialog.Result);
+        };
 
-        await _downloadManager.AddDownloadAsync(dialog.Result);
+        ShowIndependently(dialog, CascadeStep(_childWindows.Count));
     }
 
     /// <summary>
@@ -1304,14 +1432,10 @@ public sealed class MainForm : Form
     {
         _trayIcon = new TrayIconController(_downloadManager);
         _trayIcon.OpenRequested += (_, _) => RestoreAndActivate();
-        _trayIcon.AddUrlRequested += (_, _) =>
-        {
-            // The Add dialog is modal on this window, so the window has to be
-            // back before it opens — otherwise the dialog is the only thing on
-            // screen and dismissing it leaves nothing behind.
-            RestoreAndActivate();
-            OnAddDownloadClicked();
-        };
+        // Nothing else comes back with it: the Add window stands on its own now,
+        // so asking for it from the tray no longer means asking for the main
+        // window too.
+        _trayIcon.AddUrlRequested += (_, _) => OnAddDownloadClicked();
         _trayIcon.PauseAllRequested += (_, _) => _downloadManager.PauseAll();
         _trayIcon.ResumeAllRequested += (_, _) => ResumeAll();
         _trayIcon.ExitRequested += (_, _) => ExitApplication();
@@ -1328,33 +1452,33 @@ public sealed class MainForm : Form
     }
 
     /// <summary>
-    /// Puts the whole application out of sight, not just this window. Hiding an
-    /// owner does <em>not</em> hide the windows it owns — verified, not assumed —
-    /// so any open details or completion window would otherwise be left floating
-    /// on the desktop with nothing behind it. They are remembered so the same set
-    /// comes back when the window does.
+    /// Puts the whole application out of sight, not just this window. The
+    /// secondary windows are independent — their own taskbar buttons, closable on
+    /// their own — so nothing hides them for us; leaving them behind would answer
+    /// "close to tray" with a desktop still full of QuickByte. They are
+    /// remembered so the same set comes back when the main window does.
     /// </summary>
     private void HideToTray()
     {
-        _hiddenOwnedForms.Clear();
-        foreach (var owned in OwnedForms)
+        _hiddenChildWindows.Clear();
+        foreach (var child in _childWindows.ToList())
         {
-            if (!owned.Visible) continue;
-            _hiddenOwnedForms.Add(owned);
-            owned.Hide();
+            if (!child.Visible) continue;
+            _hiddenChildWindows.Add(child);
+            child.Hide();
         }
 
         Hide();
         _trayIcon.NotifyWindowHidden();
     }
 
-    private void RestoreHiddenOwnedForms()
+    private void RestoreHiddenChildWindows()
     {
-        foreach (var owned in _hiddenOwnedForms)
+        foreach (var child in _hiddenChildWindows.ToList())
         {
-            if (!owned.IsDisposed) owned.Show();
+            if (!child.IsDisposed) child.Show();
         }
-        _hiddenOwnedForms.Clear();
+        _hiddenChildWindows.Clear();
     }
 
     /// <summary>

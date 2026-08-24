@@ -35,10 +35,13 @@ public sealed class DownloadCompleteForm : Form
         Width = 580;
         Height = 320;
         FormBorderStyle = FormBorderStyle.FixedDialog;
-        StartPosition = FormStartPosition.CenterParent;
+        // Independent of the main window, which is routinely in the tray by the
+        // time a download finishes: without a taskbar button of its own this
+        // window would have no way back once something covered it.
+        StartPosition = FormStartPosition.CenterScreen;
         MaximizeBox = false;
-        MinimizeBox = false;
-        ShowInTaskbar = false;
+        MinimizeBox = true;
+        ShowInTaskbar = true;
         BackColor = Theme.Surface;
         Font = Theme.Ui;
         Icon = CreateIcon();

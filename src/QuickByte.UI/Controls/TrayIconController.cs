@@ -117,13 +117,26 @@ public sealed class TrayIconController : IDisposable
     /// itself once per run — the first time a close button doesn't close
     /// something is the only time it is surprising.
     /// </summary>
-    public void NotifyWindowHidden()
+    public void NotifyWindowHidden() =>
+        ShowHintOnce("QuickByte is still running",
+            "Downloads continue in the background. Right-click this icon and choose Exit to quit.");
+
+    /// <summary>
+    /// Called when the app was launched straight into the notification area
+    /// (Options &gt; Startup). A launch that puts nothing on screen looks exactly
+    /// like one that failed, so it says where QuickByte went — once, sharing the
+    /// hint budget with <see cref="NotifyWindowHidden"/>: a user who has been
+    /// told where the icon is does not need telling twice.
+    /// </summary>
+    public void NotifyStartedMinimized() =>
+        ShowHintOnce("QuickByte started minimized",
+            "It is running here in the notification area. Double-click this icon to open it.");
+
+    private void ShowHintOnce(string title, string body)
     {
         if (_hintShown) return;
         _hintShown = true;
-        _notifyIcon.ShowBalloonTip(4000, "QuickByte is still running",
-            "Downloads continue in the background. Right-click this icon and choose Exit to quit.",
-            ToolTipIcon.Info);
+        _notifyIcon.ShowBalloonTip(4000, title, body, ToolTipIcon.Info);
     }
 
     public void Dispose()

@@ -39,6 +39,8 @@ public sealed class SettingsForm : Form
     private TextBox _tempFolderTextBox = null!;
     private CheckBox _autoOpenDetailsCheckBox = null!;
     private CheckBox _showCompletionCheckBox = null!;
+    private CheckBox _startWithWindowsCheckBox = null!;
+    private CheckBox _startMinimizedCheckBox = null!;
     private CheckBox _browserIntegrationCheckBox = null!;
     private NumericUpDown _browserPortUpDown = null!;
     private TextBox _browserTokenTextBox = null!;
@@ -72,6 +74,7 @@ public sealed class SettingsForm : Form
         BuildConnectionTab(tabs.AddPage("Connection"));
         BuildFoldersTab(tabs.AddPage("Folders"));
         BuildInterfaceTab(tabs.AddPage("Interface"));
+        BuildStartupTab(tabs.AddPage("Startup"));
         BuildBrowserTab(tabs.AddPage("Browser"));
 
         Controls.Add(tabs);
@@ -137,6 +140,33 @@ public sealed class SettingsForm : Form
         _showCompletionCheckBox = AddCheckRow(layout, row++,
             "Show the download complete window when a download finishes");
 
+    }
+
+    /// <summary>
+    /// When QuickByte runs and whether it shows itself when it does.
+    ///
+    /// Only the flags are saved here. Registering with Windows is a registry
+    /// write, and it happens in <see cref="OnSaveClicked"/> through
+    /// <see cref="StartupRegistration"/> — the setting is the user's intent, the
+    /// Run key is the machine's opinion of it, and the two are only guaranteed
+    /// to agree at the moment Save succeeds.
+    /// </summary>
+    private void BuildStartupTab(Panel page)
+    {
+        var layout = NewGrid(page, rows: 4);
+        int row = 0;
+
+        _startWithWindowsCheckBox = AddCheckRow(layout, row++,
+            "Start QuickByte when Windows starts");
+        AddNoteRow(layout, row++,
+            "Adds QuickByte to this account's startup programs. No administrator rights needed, "
+            + "and Task Manager's Startup tab can turn it off again.");
+
+        _startMinimizedCheckBox = AddCheckRow(layout, row++,
+            "Start minimized to the notification area");
+        AddNoteRow(layout, row++,
+            "Applies to every launch, not only the one Windows performs at sign-in. "
+            + "Downloads still resume; double-click the tray icon to open the window.");
     }
 
     /// <summary>
@@ -325,6 +355,31 @@ public sealed class SettingsForm : Form
         return box;
     }
 
+    /// <summary>
+    /// A muted paragraph under a checkbox, for the sentence a caption cannot
+    /// carry. Spans the full grid width and wraps rather than clipping — unlike
+    /// the fixed-height label inside <see cref="CaptionBlock"/>, which shares its
+    /// row with a control.
+    /// </summary>
+    private static void AddNoteRow(TableLayoutPanel layout, int row, string text)
+    {
+        var note = new Label
+        {
+            Text = text,
+            Dock = DockStyle.Fill,
+            ForeColor = Theme.TextMuted,
+            Font = Theme.UiSmall,
+            BackColor = Theme.Surface,
+            Margin = new Padding(2, 0, 0, 0)
+        };
+        layout.Controls.Add(note, 0, row);
+        layout.SetColumnSpan(note, 3);
+
+        // A note is two lines of small text, not a control row: left at the
+        // grid's 58 px it would float half a row below the checkbox it explains.
+        layout.RowStyles[row] = new RowStyle(SizeType.Absolute, 44);
+    }
+
     private static Panel CaptionBlock(string caption, string hint)
     {
         var panel = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Surface, Margin = new Padding(0, 8, 8, 0) };
@@ -379,6 +434,14 @@ public sealed class SettingsForm : Form
         _autoOpenDetailsCheckBox.Checked = s.AutoOpenDetailsWindow;
         _showCompletionCheckBox.Checked = s.ShowCompletionWindow;
 
+        // Either half is enough to answer "will QuickByte start with Windows?"
+        // with yes: the Run entry is what Windows acts on, and the saved flag is
+        // what StartupRegistration.Sync re-asserts at the next launch if
+        // something removed that entry. Reading the registry first is what keeps
+        // the box honest on a profile where the write never landed.
+        _startWithWindowsCheckBox.Checked = StartupRegistration.IsEnabled || s.StartWithWindows;
+        _startMinimizedCheckBox.Checked = s.StartMinimized;
+
         _browserIntegrationCheckBox.Checked = s.BrowserIntegrationEnabled;
         _browserPortUpDown.Value = Math.Clamp(s.BrowserIntegrationPort, 1024, 65535);
 
@@ -425,6 +488,8 @@ public sealed class SettingsForm : Form
             TempFolder = _tempFolderTextBox.Text.Trim(),
             AutoOpenDetailsWindow = _autoOpenDetailsCheckBox.Checked,
             ShowCompletionWindow = _showCompletionCheckBox.Checked,
+            StartWithWindows = _startWithWindowsCheckBox.Checked,
+            StartMinimized = _startMinimizedCheckBox.Checked,
             BrowserIntegrationEnabled = _browserIntegrationCheckBox.Checked,
             BrowserIntegrationPort = (int)_browserPortUpDown.Value,
             // Read back from Current rather than from the read-only field: the
@@ -446,7 +511,19 @@ public sealed class SettingsForm : Form
             return;
         }
 
+        // Saved before the registry write, and the write is not allowed to fail
+        // the save: everything else on this page is still valid, and a startup
+        // entry Windows refused is worth a sentence, not a lost Options session.
         _settingsService.Save(updated);
+
+        if (!StartupRegistration.TryApply(updated.StartWithWindows, out string? startupError))
+        {
+            MessageBox.Show(this,
+                $"Your options were saved, but Windows would not {(updated.StartWithWindows ? "add" : "remove")} "
+                + $"QuickByte's startup entry: {startupError}",
+                "Options", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+
         DialogResult = DialogResult.OK;
         Close();
     }

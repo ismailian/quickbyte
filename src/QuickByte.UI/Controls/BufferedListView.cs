@@ -102,7 +102,7 @@ public class BufferedListView : ListView
     /// </summary>
     public void InvalidateCell(ListViewItem? row, int columnIndex)
     {
-        if (row?.ListView != this) return;
+        if (row?.ListView != this || !IsHandleCreated) return; // see RowBounds
         if (columnIndex < 0 || columnIndex >= row.SubItems.Count) { InvalidateRow(row); return; }
 
         var bounds = row.SubItems[columnIndex].Bounds;
@@ -113,6 +113,13 @@ public class BufferedListView : ListView
     private Rectangle RowBounds(ListViewItem? row)
     {
         if (row?.ListView != this) return Rectangle.Empty;
+
+        // Reading ListViewItem.Bounds goes through a window message, and touching
+        // Handle *creates* the window. There is nothing on screen to repaint
+        // while the app sits in the tray — including a whole session of one, if
+        // it started minimized — so ask nothing of a control that has no window.
+        if (!IsHandleCreated) return Rectangle.Empty;
+
         var bounds = row.Bounds;
         return bounds.Width <= 0 || bounds.Height <= 0 ? Rectangle.Empty : bounds;
     }

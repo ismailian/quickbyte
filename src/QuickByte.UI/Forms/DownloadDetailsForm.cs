@@ -84,7 +84,11 @@ public sealed class DownloadDetailsForm : Form
         Text = _item.FileName;
         Width = 600;
         Height = 420;
-        StartPosition = FormStartPosition.CenterParent;
+        // Unowned by MainForm — see MainForm.ShowIndependently — so there is no
+        // parent to centre on, and this window can be minimised, closed and
+        // task-switched to on its own.
+        StartPosition = FormStartPosition.CenterScreen;
+        ShowInTaskbar = true;
         MinimumSize = new Size(600, 420);
         MaximumSize = new Size(600, 800);
         MaximizeBox = false;

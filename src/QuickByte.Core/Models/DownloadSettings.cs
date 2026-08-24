@@ -75,6 +75,21 @@ public sealed class DownloadSettings
     /// </summary>
     public string BrowserIntegrationToken { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Register QuickByte to launch when the user signs in. The flag is the
+    /// user's intent; the registration itself is a Windows concept and lives in
+    /// the UI layer (<c>UI/StartupRegistration.cs</c>) — Core stores the
+    /// preference and never touches the registry.
+    /// </summary>
+    public bool StartWithWindows { get; set; }
+
+    /// <summary>
+    /// Start with no window on screen, only the notification-area icon. Applies
+    /// to every launch, not just the one Windows performs at sign-in: a user who
+    /// asked for a background download manager means it either way.
+    /// </summary>
+    public bool StartMinimized { get; set; }
+
     /// <summary>Pop the download details window open as soon as a download is added.</summary>
     public bool AutoOpenDetailsWindow { get; set; } = true;
 

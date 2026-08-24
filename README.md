@@ -312,6 +312,8 @@ directly to `DownloadSettings`:
 | Temp folder (chunk files) | OS temp + `QuickByte` |
 | Open the details window automatically | on |
 | Show the download complete window | on |
+| Start QuickByte when Windows starts | off |
+| Start minimized to the notification area | off |
 | Browser integration | on |
 | Browser bridge port | 1024–65535, default 9614 |
 | Browser pairing token | generated on first use |
@@ -319,6 +321,14 @@ directly to `DownloadSettings`:
 Two of these are honoured **live** rather than at the next download: the
 global speed limit, and browser integration (enabling it, or moving its port,
 takes effect on Save). Everything else is snapshotted — see `CLAUDE.md`.
+
+The two startup settings are on the **Startup** tab. "Start with Windows"
+writes a value under `HKCU\...\CurrentVersion\Run` — per-user, no elevation,
+and visible in Task Manager's Startup tab so it can be turned off from there
+too; QuickByte re-asserts it at each launch, which is what keeps it pointing at
+the right executable after an update. "Start minimized" applies to every
+launch, not only the one Windows performs at sign-in, and `--minimized` on the
+command line forces it for a single run.
 
 ## UI
 
@@ -346,7 +356,15 @@ Every window is styled after classic IDM, on a single flat palette defined in
   Open Folder actions. Opting out of it from the checkbox is persisted.
 - **Add New Download** pre-fills from the clipboard and resolves file
   info (type, size, resumability) before you commit; **Options** groups
-  settings into Connection / Folders / Interface tabs.
+  settings into Connection / Folders / Interface / Startup / Browser tabs.
+
+Every secondary window — Add New Download, download details, download
+complete — is a window in its own right: unowned, with its own taskbar button,
+and modeless. Opening one from the notification area or from a browser capture
+brings up that window alone and leaves the main window wherever it was.
+"Close to tray" is still one gesture for the whole application: it hides the
+open secondary windows too, and puts the same set back when the main window
+returns.
 - **Update window** — installed version against the offered one, the release
   notes, and a progress bar for the installer download. The same window serves
   the startup prompt and a manual check; see Update checker above.
