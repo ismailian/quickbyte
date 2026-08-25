@@ -25,6 +25,15 @@ public sealed class SingleInstance : IDisposable
     private const string MutexName = @"Local\QuickByte.SingleInstance";
     private const int HandoffTimeoutMilliseconds = 3000;
 
+    /// <summary>
+    /// The command-line switch the scheduler agent launches QuickByte with when
+    /// a queue comes due, and — as <c>run-queue:{guid}</c> — the shape that
+    /// request takes when it is handed to an instance that is already running.
+    /// </summary>
+    public const string RunQueueSwitch = "--run-queue";
+
+    private const string QueuePayloadPrefix = "run-queue:";
+
     // Named pipes are machine-wide even when the mutex is not, so the user name
     // has to be part of the pipe name for the two to agree on scope.
     private static string PipeName => $"QuickByte.SingleInstance.{Environment.UserName}";
@@ -109,6 +118,48 @@ public sealed class SingleInstance : IDisposable
                 // listener down — the next launch still deserves to be answered.
             }
         }
+    }
+
+    /// <summary>
+    /// What a losing launch sends to the winner: the queue it was asked to
+    /// start, or the link it was given, or nothing at all.
+    ///
+    /// One payload rather than two channels because the pipe carries one string
+    /// and the receiver has to be able to tell the two apart — a URL is
+    /// recognized by its scheme, a queue by this prefix.
+    /// </summary>
+    public static string BuildHandoffPayload(IEnumerable<string> arguments)
+    {
+        var argumentList = arguments.ToList();
+
+        if (FindQueueId(argumentList) is { } queueId)
+            return QueuePayloadPrefix + queueId.ToString("D");
+
+        return FindUrl(argumentList) ?? string.Empty;
+    }
+
+    /// <summary>
+    /// The queue id in a command line or in a handed-over payload:
+    /// <c>--run-queue {guid}</c> as the agent passes it, or
+    /// <c>run-queue:{guid}</c> as it crosses the pipe.
+    /// </summary>
+    public static Guid? FindQueueId(IEnumerable<string> arguments)
+    {
+        var tokens = arguments.Select(argument => argument.Trim().Trim('"')).ToList();
+
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            string token = tokens[i];
+
+            if (token.StartsWith(QueuePayloadPrefix, StringComparison.OrdinalIgnoreCase) &&
+                Guid.TryParse(token[QueuePayloadPrefix.Length..], out var inlineId))
+                return inlineId;
+
+            if (!string.Equals(token, RunQueueSwitch, StringComparison.OrdinalIgnoreCase)) continue;
+            if (i + 1 < tokens.Count && Guid.TryParse(tokens[i + 1], out var switchId)) return switchId;
+        }
+
+        return null;
     }
 
     /// <summary>

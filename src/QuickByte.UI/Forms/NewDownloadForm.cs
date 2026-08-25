@@ -53,11 +53,26 @@ public sealed class NewDownloadForm : Form
     private Label _fileSizeLabel = null!;
     private Label _rangeSupportLabel = null!;
     private NumericUpDown _connectionsUpDown = null!;
+    private ComboBox _queueComboBox = null!;
     private Button _okButton = null!;
 
     private RemoteFileInfo? _fetchedInfo;
 
+    /// <summary>
+    /// The queues this download may be filed into. Passed in rather than pulled
+    /// from a manager: this dialog resolves a link, it does not own queue state,
+    /// and the caller is the one that puts the finished download into the queue.
+    /// </summary>
+    private readonly IReadOnlyList<DownloadQueue> _queues;
+
     public DownloadRequest? Result { get; private set; }
+
+    /// <summary>
+    /// The queue the user chose, or null for "start now". When it is set,
+    /// <see cref="Result"/> asks for a download that is added but not started —
+    /// the queue decides when it runs.
+    /// </summary>
+    public Guid? SelectedQueueId { get; private set; }
 
     /// <param name="initialUrl">
     /// A link to open the dialog on — supplied when QuickByte is launched with a
@@ -74,10 +89,12 @@ public sealed class NewDownloadForm : Form
         ISettingsService settingsService,
         IRemoteFileInfoProvider fileInfoProvider,
         string? initialUrl = null,
-        CapturedDownload? captured = null)
+        CapturedDownload? captured = null,
+        IReadOnlyList<DownloadQueue>? queues = null)
     {
         _settingsService = settingsService;
         _fileInfoProvider = fileInfoProvider;
+        _queues = queues ?? Array.Empty<DownloadQueue>();
         _capturedHeaders = captured?.ToHeaders();
         _preferredFileName = string.IsNullOrWhiteSpace(captured?.FileName)
             ? null
@@ -127,7 +144,7 @@ public sealed class NewDownloadForm : Form
     {
         Text = "Add New Download";
         Width = 580;
-        Height = 566;
+        Height = 606;
         // Shown modeless and unowned by MainForm, so it is a window in its own
         // right: it gets a taskbar button, it can be minimised out of the way
         // while the fetch runs, and CenterParent would have no parent to centre
@@ -157,7 +174,7 @@ public sealed class NewDownloadForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 3,
-            RowCount = 8,
+            RowCount = 9,
             BackColor = Theme.Surface,
             AutoSize = false
         };
@@ -165,10 +182,11 @@ public sealed class NewDownloadForm : Form
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
 
-        // Address · status · login · info card · save as · save to · connections,
-        // then a percent-sized filler — without it the last real row swallows all
-        // the leftover height and its label floats out of line with its field.
-        foreach (int height in new[] { 38, 26, 34, 80, 38, 38, 38 })
+        // Address · status · login · info card · save as · save to · connections ·
+        // queue, then a percent-sized filler — without it the last real row
+        // swallows all the leftover height and its label floats out of line with
+        // its field.
+        foreach (int height in new[] { 38, 26, 34, 80, 38, 38, 38, 38 })
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
@@ -266,6 +284,32 @@ public sealed class NewDownloadForm : Form
         connectionsRow.Controls.Add(connectionsHint);
         layout.Controls.Add(connectionsRow, 1, row);
         layout.SetColumnSpan(connectionsRow, 2);
+        row++;
+
+        // --- Queue ------------------------------------------------------------
+        layout.Controls.Add(FormChrome.FieldLabel("Queue"), 0, row);
+        _queueComboBox = new ComboBox
+        {
+            Dock = DockStyle.Fill,
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Theme.Surface,
+            ForeColor = Theme.Text,
+            Font = Theme.Ui,
+            Margin = new Padding(0, 6, 0, 6)
+        };
+
+        // "Start now" is the first entry and the default, because it is what the
+        // Download button has always meant. Choosing a queue instead is the
+        // deliberate act, and it is the one that leaves the file waiting.
+        _queueComboBox.Items.Add(new QueueChoice(null, "Start now — don't queue it"));
+        foreach (var queue in _queues)
+            _queueComboBox.Items.Add(new QueueChoice(queue.Id, $"Add to \"{queue.Name}\""));
+        _queueComboBox.SelectedIndex = 0;
+        _queueComboBox.Enabled = _queues.Count > 0;
+
+        layout.Controls.Add(_queueComboBox, 1, row);
+        layout.SetColumnSpan(_queueComboBox, 2);
 
         body.Controls.Add(layout);
         return body;
@@ -506,6 +550,8 @@ public sealed class NewDownloadForm : Form
             return;
         }
 
+        SelectedQueueId = (_queueComboBox.SelectedItem as QueueChoice)?.QueueId;
+
         Result = new DownloadRequest(
             _urlTextBox.Text.Trim(),
             _fetchedInfo,
@@ -514,10 +560,27 @@ public sealed class NewDownloadForm : Form
             (int)_connectionsUpDown.Value)
         {
             Credentials = CurrentCredentials(),
-            Headers = _capturedHeaders
+            Headers = _capturedHeaders,
+            StartImmediately = SelectedQueueId is null
         };
 
         DialogResult = DialogResult.OK;
         Close();
+    }
+
+    /// <summary>One entry in the queue drop-down; the text is what the list draws.</summary>
+    private sealed class QueueChoice
+    {
+        public QueueChoice(Guid? queueId, string label)
+        {
+            QueueId = queueId;
+            Label = label;
+        }
+
+        public Guid? QueueId { get; }
+
+        private string Label { get; }
+
+        public override string ToString() => Label;
     }
 }

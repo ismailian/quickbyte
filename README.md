@@ -13,8 +13,10 @@ QuickByte.sln
 Directory.Build.props      Single source of truth for the version and assembly metadata
 src/
   QuickByte.Core/         Class library — all business logic, zero WinForms references
-    Enums/                DownloadStatus, ConnectionStatus, DownloadCategory
-    Models/                DownloadItem, DownloadSettings, ConnectionInfo, RemoteFileInfo
+    Enums/                DownloadStatus, ConnectionStatus, DownloadCategory,
+                            QueueState, ScheduleDays
+    Models/                DownloadItem, DownloadSettings, ConnectionInfo, RemoteFileInfo,
+                            DownloadQueue, QueueSchedule
     Events/                Event-arg DTOs used for progress/status/connections/list-changed
     Interfaces/           Contracts for every service (see Architecture below)
     Services/              Concrete implementations
@@ -28,16 +30,24 @@ src/
   QuickByte.UI/            WinForms application
     Program.cs             Composition root (wires Core services together)
     AppDispatcher.cs        Marshals Core events onto the UI thread
-    SingleInstance.cs       Mutex + named pipe: one copy per user, URLs handed to it
+    SingleInstance.cs       Mutex + named pipe: one copy per user, URLs and queue
+                              requests handed to it
+    StartupRegistration.cs  "Start with Windows" — the HKCU Run entry for the app
+    QueueAgentRegistration.cs  The same, for the scheduler agent below
     AppVersion.cs           Reads the build's version back off its own assembly
     Forms/                  MainForm, DownloadDetailsForm, NewDownloadForm, SettingsForm,
-                              UpdateForm
+                              QueueManagerForm, UpdateForm
     Controls/                ListViewProgressPainter, ConnectionSegmentsBar, IconFactory,
                               BrandIcon, IcoWriter (shared owner-draw progress bar, the
                               connection start-position/progress bar, and every toolbar/
                               tree/file icon — all drawn with GDI+)
     Assets/                 quickbyte.ico — the one real image file, generated from
                               BrandIcon.cs so the shell icon matches the drawn one
+
+  QuickByte.Agent/         Windowless scheduler that outlives the app: reads queues.json,
+    Program.cs               and launches QuickByte when a queue's schedule comes due.
+    SchedulerLoop.cs         Starts with the user's session; exits by itself when no
+    AgentLog.cs              queue is scheduled. See "Queues and scheduling" below.
 
 browser/
   chrome-extension/        Manifest V3 extension: captures Chrome's downloads and
@@ -62,12 +72,19 @@ dotnet build QuickByte.sln
 dotnet run --project src/QuickByte.UI/QuickByte.UI.csproj
 ```
 
+The solution builds three projects: the engine, the WinForms app, and
+`QuickByte.Agent` — the scheduler that starts queues while the app is closed.
+The agent has to be **deployed beside `QuickByte.exe`**: the app finds it in its
+own folder, and the agent finds the app the same way. A copy shipped without it
+still schedules queues for as long as its window (or tray icon) is there; the
+queue window says so rather than promising something it cannot do.
+
 `QuickByte.Core` alone targets plain `net8.0` and will build/test on any OS.
 
 ### Versioned builds
 
 The product version lives in one place — `Directory.Build.props` — and flows
-into both assemblies, the .exe's file properties, the window title and the
+into every assembly, the .exe's file properties, the window title and the
 About box. A build server can add a build number or a pre-release label without
 editing the file:
 
@@ -139,7 +156,16 @@ to Core's events. This means the download engine could be reused headless
   UI-framework-agnostic while the WinForms layer supplies the real
   `SynchronizationContext`-based implementation.
 - **Repository** — `IDownloadRepository` / `DownloadRepository` persist the
-  download list as JSON so state survives an app restart.
+  download list as JSON so state survives an app restart; `IQueueRepository` /
+  `QueueRepository` do the same for the queue list, with one extra rule (see
+  Queues and scheduling: a second process reads that file).
+
+**Queues sit beside the engine, not inside it.** `IQueueManager` /
+`QueueManager` own the queues and drive downloads only through
+`IDownloadManager` — the download pipeline has no idea queues exist. A queue is
+a policy about *when* to call Resume and *how fast* to let the result go, and
+keeping it out of the pipeline is what stops six-layer plumbing from growing a
+seventh concern. See Queues and scheduling below.
 
 **Multi-window synchronization.** `MainForm` and any number of open
 `DownloadDetailsForm` windows never talk to each other directly. Both
@@ -175,6 +201,97 @@ processes sharing one `downloads.json` would clobber each other's state.
 Launching it again (with a URL, say from a browser) hands the link to the
 running window over a named pipe and exits, rather than starting a rival
 download engine.
+
+## Queues and scheduling
+
+A **queue** is a named, ordered list of downloads with its own settings: how
+many of them run at once, a speed limit they share, and — the point of the
+feature — when the queue starts itself. This is IDM's model, and it is the
+reason a download manager can be told "fetch these eleven files overnight,
+three at a time, at half my line rate" and then be closed.
+
+Queues live in `%AppData%/QuickByte/queues.json`, next to `downloads.json`.
+Membership is an ordered list of download ids **on the queue**, not a `QueueId`
+field on each download: order is half of what a queue is, and one owner means
+the two files can never disagree about what is in one.
+
+**Running a queue.** `QueueManager` gives a running queue one runner task. The
+runner is a loop rather than a `Task.WhenAll` over a snapshot, so it re-reads
+the queue on every pass: a download appended while it runs is picked up, a
+concurrency change takes effect on the next free slot, and a stop time can end
+the run between downloads. Each download is started **at most once per run** —
+without that rule a queue would instantly restart a download the user had just
+paused, and a download that failed to start at all would spin the loop. Queued
+downloads are started through `IDownloadManager.ResumeAsync` like any other, so
+the app-wide concurrent-download limit and the global speed limit still apply on
+top of the queue's own; a queue asking for eight on an app configured for three
+gets three.
+
+**The three speed tiers.** A running download's connections share a composite
+limiter of *its own* limit, *its queue's* limit, and the *global* one. They are
+separate limiters rather than one number because they mean different things: the
+per-download cap is the user's choice and is persisted on the item, the queue
+cap belongs to whichever queue happens to be running the file and is lifted the
+moment it finishes or leaves. All three apply mid-transfer. A download in no
+queue pays nothing for the tier — an unset limiter short-circuits before it
+takes a lock.
+
+**Scheduling is a window, not an instant.** A schedule that only knew its start
+time could only fire if something happened to be watching the clock at exactly
+that minute. `QueueSchedule` instead answers "is this queue supposed to be
+running right now?": days of the week, a start time, and either an explicit stop
+time (which may cross midnight — 22:00 until 06:00 needs no second date field)
+or a one-hour grace period. That is what lets a run that was missed because the
+machine was asleep still happen when the machine comes back, and what stops the
+first launch of the week from starting every schedule it slept through.
+
+**Two watchers, one file, one verdict.** While QuickByte is open, a 20-second
+timer in `QueueManager` starts due queues. While it is *not* — which is most of
+the time, and certainly at 03:00 — that job belongs to **`QuickByte.Agent`**, a
+separate, windowless process:
+
+- It starts with the user's session from its own `HKCU\...\Run` entry, written
+  and re-asserted by the app (`QueueAgentRegistration`) whenever any queue has a
+  schedule, and removed again when none does.
+- It reads the same `queues.json` and asks Core the same question — literally
+  the same method, `DownloadQueue.IsDue` — so the two can never disagree by a
+  minute and start a queue twice.
+- When a queue is due it launches `QuickByte.exe --run-queue {id} --minimized`.
+  If QuickByte is already running, that launch is handed over the existing
+  single-instance pipe and the running copy starts the queue; the agent skips
+  even that when it can see the app's mutex, and lets the in-app timer do it.
+- It downloads nothing, holds no state of its own, and **exits by itself** once
+  no queue has a schedule left — a user who never schedules anything never has a
+  background process.
+- `DownloadQueue.LastRunAt` is written the moment a run starts and persisted, so
+  neither watcher starts the same window twice.
+- It writes one line per decision to `%AppData%/QuickByte/agent.log`, and
+  `QuickByte.Agent.exe --once` performs a single evaluation and exits. A
+  windowless process has no other way to answer "why didn't my queue run?".
+
+**Why not a Windows service or a boot-time task?** Because both need an
+administrator to install, and neither is the right shape. A service runs before
+anyone signs in, as SYSTEM, with no access to the user's download folder,
+credentials or cookies — everything a download manager needs. Registering at
+sign-in per user needs no elevation, is visible (and switchable off) in Task
+Manager's Startup tab, and is the earliest moment a per-user download queue
+means anything at all. The agent survives QuickByte closing, crashing or being
+updated, which is the property that was actually being asked for.
+
+The one thing this cannot do is *wake a sleeping machine* — that needs a Task
+Scheduler task with a wake trigger. A queue scheduled while the machine is
+asleep starts when it wakes, if that is within the schedule's window.
+
+**In the UI.** The sidebar's **Queues** branch lists every queue with its file
+count and filters the list to it. **Tasks > Queues & Scheduler** (and the
+toolbar's Queues button) opens the queue window: queues on the left, and for the
+selected one its files in queue order (with move up/down/take out), its
+Options — name, downloads at once, queue speed limit — and its Schedule. Edits
+apply as they are made rather than behind an OK button, because the queue may be
+running while the window is open and another process is reading its schedule.
+Downloads join a queue from the main window's right-click menu (**Add to
+Queue**), or from the Add New Download dialog's **Queue** field — choosing a
+queue there adds the download without starting it, which is the whole point.
 
 ## Update checker
 
@@ -318,6 +435,10 @@ directly to `DownloadSettings`:
 | Browser bridge port | 1024–65535, default 9614 |
 | Browser pairing token | generated on first use |
 
+A queue's own settings — downloads at once, queue speed limit, and its
+schedule — are per queue rather than global, and live in the Queues & Scheduler
+window (`queues.json`) instead of here.
+
 Two of these are honoured **live** rather than at the next download: the
 global speed limit, and browser integration (enabling it, or moving its port,
 takes effect on Save). Everything else is snapshotted — see `CLAUDE.md`.
@@ -337,8 +458,9 @@ Every window is styled after classic IDM, on a single flat palette defined in
 
 - **Main window** — menu bar (File/Tasks/Downloads/View/Help), an icon
   toolbar (Add URL, Resume, Pause, Stop All, Delete, Delete Completed,
-  Properties, Options), a category tree sidebar (All Downloads, grouped by
-  file type, plus Unfinished/Finished/Failed/Queues), a downloads grid with a
+  Properties, Queues, Options), a category tree sidebar (All Downloads,
+  grouped by file type, plus Unfinished/Finished/Failed and a Queues branch
+  with one node per queue), a downloads grid with a
   per-file-type icon and an owner-drawn progress bar, a right-click context
   menu on each row, and a status bar showing download counts and aggregate
   speed.
@@ -365,6 +487,12 @@ brings up that window alone and leaves the main window wherever it was.
 "Close to tray" is still one gesture for the whole application: it hides the
 open secondary windows too, and puts the same set back when the main window
 returns.
+- **Queues & Scheduler window** — every queue on the left; on the right the
+  selected queue's files in run order (move up/down/take out), its Options
+  (name, downloads at once, queue speed limit) and its Schedule (days, start
+  time, optional stop time), with a line saying when it will next start and
+  whether the background scheduler is there to do it. Start and Stop run the
+  queue by hand. See Queues and scheduling above.
 - **Update window** — installed version against the offered one, the release
   notes, and a progress bar for the installer download. The same window serves
   the startup prompt and a manual check; see Update checker above.
@@ -387,7 +515,7 @@ can never drift from the one the windows draw.
 This is a complete, working reference implementation, not a byte-for-byte
 IDM clone. A few things a production build would add:
 - A signed installer.
-- Scheduling (start/stop a queue at a given time).
+- Waking a sleeping machine for a scheduled queue — see Queues and scheduling.
 - HTTP authentication schemes beyond Basic (Digest, NTLM, negotiate).
 - A packed, store-published browser extension — the one in `browser/` is
   loaded unpacked, and only Chrome's hooks are wired.

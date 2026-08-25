@@ -20,4 +20,14 @@ public sealed record DownloadRequest(
     public DownloadCredentials? Credentials { get; init; }
 
     public IReadOnlyDictionary<string, string>? Headers { get; init; }
+
+    /// <summary>
+    /// Whether the download starts the moment it is added. False for one added
+    /// to a queue, which is what makes it sit at <see cref="Enums.DownloadStatus.Queued"/>
+    /// until the queue reaches it. Note that
+    /// <see cref="Interfaces.IDownloadManager.AddDownloadAsync"/> only returns
+    /// once the download has finished when this is true — a caller that needs
+    /// the item back promptly is a caller that is queueing it.
+    /// </summary>
+    public bool StartImmediately { get; init; } = true;
 }

@@ -53,6 +53,18 @@ public interface IDownloadManager
     void SetSpeedLimit(Guid downloadId, long bytesPerSecond);
 
     /// <summary>
+    /// Caps one download at the rate its <em>queue</em> allows (0 lifts the cap),
+    /// as a third tier between the download's own limit and the global one.
+    ///
+    /// Separate from <see cref="SetSpeedLimit"/> because the two mean different
+    /// things and must not overwrite each other: that one is the user's choice
+    /// for this file and is persisted on the item, this one belongs to whichever
+    /// queue happens to be running the file and is lifted again when it leaves.
+    /// Applies mid-transfer, like the others.
+    /// </summary>
+    void SetQueueSpeedLimit(Guid downloadId, long bytesPerSecond);
+
+    /// <summary>
     /// Caps every running download to a shared <paramref name="bytesPerSecond"/>
     /// budget (0 lifts the cap). Also applies mid-transfer. Persisting the value
     /// is the settings layer's job; this only moves the live limiter.

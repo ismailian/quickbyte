@@ -36,6 +36,7 @@ public sealed class MainForm : Form
     private const int RowHeight = 26;
 
     private readonly IDownloadManager _downloadManager;
+    private readonly IQueueManager _queueManager;
     private readonly ISettingsService _settingsService;
     private readonly IUpdateService _updateService;
     private readonly IRemoteFileInfoProvider _fileInfoProvider;
@@ -63,6 +64,9 @@ public sealed class MainForm : Form
     private ToolStripButton _deleteButton = null!;
     private ToolStripButton _deleteCompletedButton = null!;
     private ToolStripButton _propertiesButton = null!;
+
+    /// <summary>The "Queues" branch of the sidebar; its children are rebuilt whenever a queue changes.</summary>
+    private TreeNode _queuesNode = null!;
 
     // Menu-bar entries that mirror the toolbar commands. Held so one
     // UpdateCommandStates() pass can grey them in step with the buttons instead
@@ -95,6 +99,8 @@ public sealed class MainForm : Form
     private ToolStripMenuItem _rowRetry = null!;
     private ToolStripMenuItem _rowRemove = null!;
     private ToolStripMenuItem _rowProperties = null!;
+    private ToolStripMenuItem _rowAddToQueue = null!;
+    private ToolStripMenuItem _rowRemoveFromQueue = null!;
 
     private TrayIconController _trayIcon = null!;
 
@@ -122,6 +128,16 @@ public sealed class MainForm : Form
     private bool _centreOnFirstShow;
 
     /// <summary>
+    /// Set for the moment an add destined for a queue takes. A queued download
+    /// has not started and will not start until the queue reaches it, so the
+    /// details window that normally follows an add would be a progress window
+    /// for something that is not happening. The flag is enough because
+    /// <see cref="IDownloadManager.AddDownloadAsync"/> raises its Added event
+    /// synchronously, on this thread, inside the call it guards.
+    /// </summary>
+    private bool _addingToQueue;
+
+    /// <summary>
     /// Set only by <see cref="ExitApplication"/>. Until then the close button is
     /// a hide button — see <see cref="OnFormClosing"/>.
     /// </summary>
@@ -133,6 +149,7 @@ public sealed class MainForm : Form
 
     public MainForm(
         IDownloadManager downloadManager,
+        IQueueManager queueManager,
         ISettingsService settingsService,
         IUpdateService updateService,
         IRemoteFileInfoProvider fileInfoProvider,
@@ -140,6 +157,7 @@ public sealed class MainForm : Form
         bool startMinimized = false)
     {
         _downloadManager = downloadManager;
+        _queueManager = queueManager;
         _settingsService = settingsService;
         _updateService = updateService;
         _fileInfoProvider = fileInfoProvider;
@@ -150,6 +168,7 @@ public sealed class MainForm : Form
         BuildTrayIcon();
         WireManagerEvents();
         PopulateFromExistingDownloads();
+        RefreshQueueNodes();
         UpdateCommandStates();
 
         _animationTimer.Tick += (_, _) => OnAnimationTick();
@@ -232,6 +251,7 @@ public sealed class MainForm : Form
         tasksMenu.DropDownItems.Add(_menuDelete);
         tasksMenu.DropDownItems.Add(_menuDeleteCompleted);
         tasksMenu.DropDownItems.Add(new ToolStripSeparator());
+        tasksMenu.DropDownItems.Add("&Queues && Scheduler...", IconFactory.Queue(16), (_, _) => OnQueuesClicked());
         tasksMenu.DropDownItems.Add("&Options...", IconFactory.Settings(16), (_, _) => OnSettingsClicked());
 
         _menuOpenFile = MenuEntry("&Open File", IconFactory.OpenFile(16), (_, _) => OpenSelectedFile());
@@ -469,6 +489,7 @@ public sealed class MainForm : Form
         _deleteButton = MakeButton("Delete", IconFactory.Delete(28), (_, _) => OnRemoveClicked());
         _deleteCompletedButton = MakeButton("Delete Completed", IconFactory.DeleteCompleted(28), (_, _) => OnDeleteCompletedClicked());
         _propertiesButton = MakeButton("Properties", IconFactory.Properties(28), (_, _) => OpenSelectedDetailsWindow());
+        var queuesButton = MakeButton("Queues", IconFactory.Queue(28), (_, _) => OnQueuesClicked(), "Queues and scheduler");
         var settingsButton = MakeButton("Options", IconFactory.Settings(28), (_, _) => OnSettingsClicked());
 
         var strip = new ToolStrip
@@ -486,7 +507,7 @@ public sealed class MainForm : Form
             addButton, new ToolStripSeparator(),
             _resumeButton, _pauseButton, _stopAllButton, new ToolStripSeparator(),
             _deleteButton, _deleteCompletedButton, new ToolStripSeparator(),
-            _propertiesButton, settingsButton
+            _propertiesButton, queuesButton, settingsButton
         });
         return strip;
     }
@@ -623,14 +644,17 @@ public sealed class MainForm : Form
             ImageKey = "failed",
             SelectedImageKey = "failed"
         };
-        var queuesNode = new TreeNode("Queues")
+        // A branch rather than a leaf: its children are the user's queues, filled
+        // in by RefreshQueueNodes and rebuilt whenever one changes. The branch
+        // itself shows everything that belongs to any queue.
+        _queuesNode = new TreeNode("Queues")
         {
-            Tag = (Func<DownloadItem, bool>)(item => item.Status == DownloadStatus.Queued),
+            Tag = (Func<DownloadItem, bool>)(item => _queueManager.QueueIdOf(item.Id) is not null),
             ImageKey = "queues",
             SelectedImageKey = "queues"
         };
 
-        tree.Nodes.AddRange(new[] { allNode, unfinishedNode, finishedNode, failedNode, queuesNode });
+        tree.Nodes.AddRange(new[] { allNode, unfinishedNode, finishedNode, failedNode, _queuesNode });
         allNode.Expand();
 
         tree.AfterSelect += (_, e) =>
@@ -647,6 +671,52 @@ public sealed class MainForm : Form
     {
         _sidebarPanel.Visible = visible;
         _sidebarSplitter.Visible = visible;
+    }
+
+    /// <summary>
+    /// Rebuilds the "Queues" branch from the queue manager. Called at startup and
+    /// on every queue change — a queue renamed, created, deleted, or one whose
+    /// membership moved — so the sidebar is a view of the queue list rather than
+    /// a copy of it that has to be kept honest by hand.
+    ///
+    /// The selection survives by node key (the queue's id) rather than by index:
+    /// the branch is cleared and refilled, and the queue that was selected may
+    /// have moved or gone.
+    /// </summary>
+    private void RefreshQueueNodes()
+    {
+        string selectedKey = _sidebar.SelectedNode?.Name ?? string.Empty;
+        bool queueNodeWasSelected = selectedKey.Length > 0 && _queuesNode.Nodes.ContainsKey(selectedKey);
+
+        _sidebar.BeginUpdate();
+        _queuesNode.Nodes.Clear();
+
+        foreach (var queue in _queueManager.Queues)
+        {
+            // Captured per node: the closure is the filter, and one shared
+            // variable would leave every node filtering for the last queue.
+            Guid queueId = queue.Id;
+
+            _queuesNode.Nodes.Add(new TreeNode($"{queue.Name} ({queue.ItemIds.Count})")
+            {
+                Name = queueId.ToString("N"),
+                Tag = (Func<DownloadItem, bool>)(item => _queueManager.QueueIdOf(item.Id) == queueId),
+                ImageKey = "queues",
+                SelectedImageKey = "queues"
+            });
+        }
+
+        if (_queuesNode.Nodes.Count > 0) _queuesNode.Expand();
+        _sidebar.EndUpdate();
+
+        if (!queueNodeWasSelected) return;
+
+        // The queue that was being looked at is gone: fall back to the branch,
+        // which still describes something ("everything in a queue") rather than
+        // leaving the list filtered by a queue that no longer exists.
+        _sidebar.SelectedNode = _queuesNode.Nodes.ContainsKey(selectedKey)
+            ? _queuesNode.Nodes[selectedKey]
+            : _queuesNode;
     }
 
     private BufferedListView BuildListView()
@@ -721,6 +791,11 @@ public sealed class MainForm : Form
         _rowRemove = MenuEntry("Remove", IconFactory.Delete(16), (_, _) => OnRemoveClicked());
         _rowProperties = MenuEntry("Properties...", IconFactory.Properties(16), (_, _) => OpenSelectedDetailsWindow());
 
+        // Filled in as the menu opens: the queue list is the user's, and it can
+        // change while this menu object lives.
+        _rowAddToQueue = new ToolStripMenuItem("Add to Queue", IconFactory.Queue(16));
+        _rowRemoveFromQueue = MenuEntry("Take Out of Queue", IconFactory.Queue(16), (_, _) => OnTakeOutOfQueueClicked());
+
         var menu = new ContextMenuStrip
         {
             RenderMode = ToolStripRenderMode.Professional,
@@ -733,6 +808,7 @@ public sealed class MainForm : Form
         {
             _rowOpenFile, _rowOpenFolder, new ToolStripSeparator(),
             _rowResume, _rowPause, _rowStop, _rowRetry, new ToolStripSeparator(),
+            _rowAddToQueue, _rowRemoveFromQueue, new ToolStripSeparator(),
             _rowRemove, new ToolStripSeparator(),
             _rowProperties
         });
@@ -766,6 +842,9 @@ public sealed class MainForm : Form
         _rowStop.Available = selection.Any(DownloadActions.CanStop);
         _rowRetry.Available = selection.Any(DownloadActions.CanRetry);
         _rowRemove.Available = true;
+
+        RebuildAddToQueueMenu();
+        _rowRemoveFromQueue.Available = selection.Any(item => _queueManager.QueueIdOf(item.Id) is not null);
 
         // Plural labels when the command is about to hit more than one row —
         // "Remove" reading the same for 1 and 12 downloads is how people delete
@@ -895,12 +974,14 @@ public sealed class MainForm : Form
         _downloadManager.DownloadListChanged += OnDownloadListChanged;
         _downloadManager.ProgressChanged += OnProgressChanged;
         _downloadManager.StatusChanged += OnStatusChanged;
+        _queueManager.QueuesChanged += OnQueuesChanged;
 
         FormClosed += (_, _) =>
         {
             _downloadManager.DownloadListChanged -= OnDownloadListChanged;
             _downloadManager.ProgressChanged -= OnProgressChanged;
             _downloadManager.StatusChanged -= OnStatusChanged;
+            _queueManager.QueuesChanged -= OnQueuesChanged;
         };
     }
 
@@ -919,7 +1000,7 @@ public sealed class MainForm : Form
             AddRow(e.Item, atTop: true);
             SetRowVisible(_rowsById[e.Item.Id], PassesFilter(e.Item));
 
-            if (_settingsService.Current.AutoOpenDetailsWindow)
+            if (_settingsService.Current.AutoOpenDetailsWindow && !_addingToQueue)
                 OpenDetailsWindow(e.Item);
         }
         else
@@ -1220,6 +1301,15 @@ public sealed class MainForm : Form
     /// </summary>
     public void HandleSecondInstance(string payload)
     {
+        // The scheduler agent launched a second copy to say a queue is due. That
+        // launch is not a person asking for anything, so it starts the queue and
+        // nothing else — no window, no focus stolen.
+        if (SingleInstance.FindQueueId(new[] { payload }) is { } queueId)
+        {
+            StartQueueFromScheduler(queueId);
+            return;
+        }
+
         string? url = SingleInstance.FindUrl(new[] { payload });
         if (url is not null)
         {
@@ -1273,17 +1363,49 @@ public sealed class MainForm : Form
     /// </summary>
     private void OnAddDownloadClicked(string? initialUrl = null, CapturedDownload? captured = null)
     {
-        var dialog = new NewDownloadForm(_settingsService, _fileInfoProvider, initialUrl, captured);
+        var dialog = new NewDownloadForm(_settingsService, _fileInfoProvider, initialUrl, captured, _queueManager.Queues);
         dialog.FormClosed += (_, _) =>
         {
             // Result is only ever set on the OK path, so its presence *is* the
-            // user's confirmation. Not awaited: AddDownloadAsync completes when
-            // the download does, and this handler is the end of a window's life.
-            if (dialog.Result is not null)
-                _ = _downloadManager.AddDownloadAsync(dialog.Result);
+            // user's confirmation.
+            if (dialog.Result is null) return;
+
+            if (dialog.SelectedQueueId is { } queueId)
+            {
+                _ = AddToQueueAsync(dialog.Result, queueId);
+                return;
+            }
+
+            // Not awaited: AddDownloadAsync completes when the download does, and
+            // this handler is the end of a window's life.
+            _ = _downloadManager.AddDownloadAsync(dialog.Result);
         };
 
         ShowIndependently(dialog, CascadeStep(_childWindows.Count));
+    }
+
+    /// <summary>
+    /// Adds a download that is destined for a queue. Awaited, unlike the
+    /// start-now path: the request carries
+    /// <see cref="DownloadRequest.StartImmediately"/> false, so this call returns
+    /// as soon as the item exists rather than when the file has finished — which
+    /// is what makes it possible to put the item in the queue at all.
+    /// </summary>
+    private async Task AddToQueueAsync(DownloadRequest request, Guid queueId)
+    {
+        DownloadItem item;
+
+        _addingToQueue = true;
+        try
+        {
+            item = await _downloadManager.AddDownloadAsync(request);
+        }
+        finally
+        {
+            _addingToQueue = false;
+        }
+
+        _queueManager.AddToQueue(queueId, new[] { item.Id });
     }
 
     /// <summary>
@@ -1328,7 +1450,21 @@ public sealed class MainForm : Form
             _downloadManager.Stop(item.Id);
     }
 
-    private void OnStopAllClicked() => _downloadManager.PauseAll();
+    private void OnStopAllClicked() => PauseEverything();
+
+    /// <summary>
+    /// Stop All, from the toolbar or the tray. Running queues are stopped first:
+    /// pausing every download while a queue is still walking its list would only
+    /// hand the freed slot to the next file in that queue, which is the opposite
+    /// of what the button says.
+    /// </summary>
+    private void PauseEverything()
+    {
+        foreach (var queue in _queueManager.Queues)
+            _queueManager.Stop(queue.Id);
+
+        _downloadManager.PauseAll();
+    }
 
     private async Task OnRetryClickedAsync()
     {
@@ -1426,6 +1562,87 @@ public sealed class MainForm : Form
         _menuOpenFolder.Enabled = single is not null && DownloadActions.CanOpenFolder(single);
     }
 
+    // ------------------------------------------------------------ Queues --
+
+    /// <summary>
+    /// Fills the "Add to Queue" submenu with the queues that exist right now.
+    /// Rebuilt per opening rather than kept in step with events: the menu is only
+    /// ever read while it is open, and a stale queue name in it would be a
+    /// download filed into the wrong place.
+    /// </summary>
+    private void RebuildAddToQueueMenu()
+    {
+        _rowAddToQueue.DropDownItems.Clear();
+
+        foreach (var queue in _queueManager.Queues)
+        {
+            Guid queueId = queue.Id;
+            var entry = new ToolStripMenuItem($"{queue.Name} ({queue.ItemIds.Count})");
+            entry.Click += (_, _) => AddSelectionToQueue(queueId);
+            _rowAddToQueue.DropDownItems.Add(entry);
+        }
+
+        if (_rowAddToQueue.DropDownItems.Count > 0)
+            _rowAddToQueue.DropDownItems.Add(new ToolStripSeparator());
+
+        // Always offered, and the only entry when there are no queues yet: a
+        // submenu that can only say "you have no queues" is a dead end.
+        _rowAddToQueue.DropDownItems.Add("New Queue...", IconFactory.Queue(16), (_, _) => OnQueuesClicked());
+        _rowAddToQueue.Available = true;
+    }
+
+    private void AddSelectionToQueue(Guid queueId)
+    {
+        var ids = SelectedItems().Select(item => item.Id).ToList();
+        if (ids.Count == 0) return;
+
+        _queueManager.AddToQueue(queueId, ids);
+    }
+
+    private void OnTakeOutOfQueueClicked()
+    {
+        var ids = SelectedItems().Select(item => item.Id).ToList();
+        if (ids.Count == 0) return;
+
+        _queueManager.RemoveFromQueues(ids);
+    }
+
+    private void OnQueuesClicked()
+    {
+        using var window = new QueueManagerForm(_queueManager, _downloadManager);
+        window.ShowDialog(this);
+    }
+
+    /// <summary>
+    /// A queue was created, renamed, deleted, or gained or lost downloads. The
+    /// sidebar branch is rebuilt, the visible rows are re-filtered (a download
+    /// that just joined the queue being looked at has to appear), and the
+    /// scheduler agent is brought in line with whether anything is scheduled at
+    /// all.
+    /// </summary>
+    private void OnQueuesChanged(object sender, QueuesChangedEventArgs e)
+    {
+        RefreshQueueNodes();
+        ApplyFilter();
+        SyncSchedulerAgent();
+    }
+
+    /// <summary>
+    /// Installs or removes the background scheduler depending on whether any
+    /// queue is scheduled. Done here rather than in the queue window because it
+    /// has to also happen when a queue changes from somewhere else — and because
+    /// it must survive that window being closed.
+    /// </summary>
+    private void SyncSchedulerAgent() => QueueAgentRegistration.Sync(_queueManager.HasScheduledQueues);
+
+    /// <summary>
+    /// Starts a queue because the scheduler agent said its time had come — see
+    /// <see cref="SingleInstance.RunQueueSwitch"/>. Deliberately silent: this
+    /// launch was asked for by a clock, and nothing about it should put a window
+    /// in front of whatever the user is doing.
+    /// </summary>
+    public void StartQueueFromScheduler(Guid queueId) => _queueManager.StartFromScheduler(queueId);
+
     // ---------------------------------------------------------- Tray + exit --
 
     private void BuildTrayIcon()
@@ -1436,7 +1653,7 @@ public sealed class MainForm : Form
         // so asking for it from the tray no longer means asking for the main
         // window too.
         _trayIcon.AddUrlRequested += (_, _) => OnAddDownloadClicked();
-        _trayIcon.PauseAllRequested += (_, _) => _downloadManager.PauseAll();
+        _trayIcon.PauseAllRequested += (_, _) => PauseEverything();
         _trayIcon.ResumeAllRequested += (_, _) => ResumeAll();
         _trayIcon.ExitRequested += (_, _) => ExitApplication();
     }
