@@ -32,4 +32,45 @@
     </None>
   </ItemGroup>
 
+
+  <!--
+    The scheduler agent is a second executable, not a library: nothing here
+    compiles against it, so ReferenceOutputAssembly is false and the reference
+    exists purely to order the build ahead of the copy below.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\QuickByte.Agent\QuickByte.Agent.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <!--
+    QueueAgentRegistration.ExecutablePath looks for QuickByte.Agent.exe in the
+    running app's own folder — that is what it registers under the Run key and
+    what it launches. A build that leaves the agent in its own bin is therefore
+    a scheduler that silently never installs, in a dev run and in the installer
+    alike (the .iss [Files] list pulls from this folder too).
+
+    GetTargetPath locates the agent's output rather than a hardcoded bin path, so
+    a configuration or target-framework change here cannot quietly copy nothing.
+    QuickByte.Core.* is excluded because this project already produces it: the
+    two are the same build, and copying one over the other only risks a lock
+    mid-build.
+  -->
+  <Target Name="CopySchedulerAgent" AfterTargets="Build">
+    <MSBuild Projects="..\QuickByte.Agent\QuickByte.Agent.csproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration)">
+      <Output TaskParameter="TargetOutputs" ItemName="SchedulerAgentTarget" />
+    </MSBuild>
+
+    <PropertyGroup>
+      <SchedulerAgentDir>@(SchedulerAgentTarget->'%(RootDir)%(Directory)')</SchedulerAgentDir>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <SchedulerAgentFiles Include="$(SchedulerAgentDir)*" Exclude="$(SchedulerAgentDir)QuickByte.Core.*" />
+    </ItemGroup>
+
+    <Error Condition="'@(SchedulerAgentFiles)' == ''" Text="The scheduler agent produced no output to copy from $(SchedulerAgentDir) — QuickByte would ship without a background scheduler." />
+
+    <Copy SourceFiles="@(SchedulerAgentFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
 </Project>

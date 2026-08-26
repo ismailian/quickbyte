@@ -19,8 +19,8 @@
 
   <PropertyGroup>
     <VersionMajor>1</VersionMajor>
-    <VersionMinor>5</VersionMinor>
-    <VersionPatch>1</VersionPatch>
+    <VersionMinor>6</VersionMinor>
+    <VersionPatch>0</VersionPatch>
     <BuildRevision Condition="'$(BuildRevision)' == ''">0</BuildRevision>
 
     <VersionPrefix>$(VersionMajor).$(VersionMinor).$(VersionPatch)</VersionPrefix>

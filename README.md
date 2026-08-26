@@ -54,12 +54,19 @@ browser/
                              hands them to QuickByte over the loopback bridge
 ```
 
-One NuGet package, and only at compile time:
-`System.Security.Cryptography.ProtectedData`, so FTP and HTTP passwords are not
-written to disk in plain text. It deploys nothing — `ProtectedData` is missing
-from the `net8.0-windows` targeting pack `QuickByte.Core` builds against, but
-ships inside the `Microsoft.WindowsDesktop.App` framework the app runs on.
-Everything else is the base class library (`System.Net.Http`,
+One NuGet package: `System.Security.Cryptography.ProtectedData`, so FTP and HTTP
+passwords are not written to disk in plain text. For `QuickByte.exe` it is
+compile-time only and deploys nothing — `ProtectedData` is missing from the
+`net8.0-windows` targeting pack `QuickByte.Core` builds against, but ships inside
+the `Microsoft.WindowsDesktop.App` framework the app runs on, so the SDK strips
+the runtime asset.
+
+The agent is the one exception, and it is worth knowing before wondering why the
+DLL is in the install folder: being windowless it runs on plain
+`Microsoft.NETCore.App`, which does *not* carry `ProtectedData`, so the SDK keeps
+the file. `System.Security.Cryptography.ProtectedData.dll` therefore ships beside
+`QuickByte.Agent.exe` and is named individually in the installer's `[Files]`
+list. Everything else is the base class library (`System.Net.Http`,
 `System.Net.Sockets`, `System.Text.Json`, `System.Windows.Forms`).
 
 ## Building and running
@@ -74,10 +81,18 @@ dotnet run --project src/QuickByte.UI/QuickByte.UI.csproj
 
 The solution builds three projects: the engine, the WinForms app, and
 `QuickByte.Agent` — the scheduler that starts queues while the app is closed.
-The agent has to be **deployed beside `QuickByte.exe`**: the app finds it in its
-own folder, and the agent finds the app the same way. A copy shipped without it
-still schedules queues for as long as its window (or tray icon) is there; the
-queue window says so rather than promising something it cannot do.
+
+The agent has to end up **beside `QuickByte.exe`**: the app looks for it in its
+own folder, and the agent finds the app the same way. Building `QuickByte.UI`
+puts it there — its `CopySchedulerAgent` target copies the agent's output into
+the app's, and fails the build rather than copying nothing, because a scheduler
+that is silently absent is indistinguishable from one that is broken. The
+installer's `[Files]` list then packages it from that same folder. Nothing needs
+doing by hand in either place.
+
+A copy that somehow ships without it still schedules queues for as long as its
+window (or tray icon) is there, and the queue window says exactly that rather
+than promising something it cannot do.
 
 `QuickByte.Core` alone targets plain `net8.0` and will build/test on any OS.
 
@@ -268,6 +283,48 @@ separate, windowless process:
 - It writes one line per decision to `%AppData%/QuickByte/agent.log`, and
   `QuickByte.Agent.exe --once` performs a single evaluation and exits. A
   windowless process has no other way to answer "why didn't my queue run?".
+
+**Nothing is registered until you schedule something — and the agent never
+registers itself.** This surprises people, so it is worth stating plainly: a
+fresh install puts *no* scheduler in Task Manager's Startup tab. The `Run` entry
+is written by the **app**, in `QueueAgentRegistration.Sync`, which runs at every
+launch and again on every queue change (`MainForm.OnQueuesChanged`). The
+condition is `HasScheduledQueues` — any queue whose schedule is actually
+enabled — so:
+
+- Tick **Enable schedule** on a queue and the entry appears immediately. The
+  same call also `Process.Start`s the agent then and there, so the first
+  schedule is watched that afternoon rather than from the next sign-in.
+- Untick the last one and the entry is removed again. The running agent is not
+  killed; it reads the same file, finds no schedules left, and exits by itself
+  within ~30 seconds.
+- The agent project contains **no registry code at all** — no
+  `Microsoft.Win32`, no `Registry`, in it or in Core. Running
+  `QuickByte.Agent.exe` by hand, with or without `--once`, evaluates schedules
+  and exits; it will never put anything in Startup. That is deliberate: a
+  process that registered its own autostart could not be switched off by
+  removing the registration.
+
+**Two entries, two different things.** Under
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`:
+
+| Value name | Written by | What it is | Task Manager shows |
+|---|---|---|---|
+| `QuickByte` | `StartupRegistration` | Options > Startup's *Start with Windows* | QuickByte |
+| `QuickByteScheduler` | `QueueAgentRegistration` | The queue scheduler agent | QuickByte Queue Scheduler |
+
+They are independent: either can be present without the other, and the labels in
+Task Manager come from each executable's `FileDescription`, not from the value
+name — so the agent is listed as **QuickByte Queue Scheduler**, not as
+`QuickByte.Agent`. Task Manager also does not always notice a value written
+while its window is open; reopen it before concluding the entry is missing.
+
+Both writes are best-effort and silent. Group policy or a security product can
+refuse them, and a queue window is not the place to learn about it — the
+schedule still runs for as long as QuickByte itself is open. Uninstalling clears
+`QuickByteScheduler` as well: setup carries a delete-on-uninstall entry for it,
+so removing QuickByte cannot leave a `Run` value pointing at an agent that is no
+longer there.
 
 **Why not a Windows service or a boot-time task?** Because both need an
 administrator to install, and neither is the right shape. A service runs before

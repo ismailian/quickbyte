@@ -35,7 +35,13 @@ internal static class Program
         using var mutex = new Mutex(initiallyOwned: false, MutexName, out bool createdNew);
         if (!createdNew) return 0;
 
-        using var cancellation = new CancellationTokenSource();
+        // Deliberately not disposed. The handler below runs *after* Main has
+        // returned, so a using here cancels an already-disposed source - an
+        // unhandled ObjectDisposedException on every ordinary exit, including
+        // --once and the "nothing left to watch" shutdown. A plain
+        // CancellationTokenSource holds nothing that process exit does not
+        // release anyway.
+        var cancellation = new CancellationTokenSource();
 
         // Sign-out and shutdown arrive as a process exit rather than a signal for
         // a windowless process; this is what still gives the loop a chance to
