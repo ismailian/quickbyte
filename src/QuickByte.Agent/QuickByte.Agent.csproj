@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      WinExe rather than Exe: this process has no window and nobody starts it
+      from a prompt, and an Exe would flash a console every time Windows signs
+      the user in. There is no message loop behind it — the subsystem flag is
+      the whole reason for the choice.
+    -->
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>QuickByte.Agent</RootNamespace>
+    <AssemblyName>QuickByte.Agent</AssemblyName>
+    <AssemblyTitle>QuickByte Queue Scheduler</AssemblyTitle>
+    <Description>Background scheduler that starts QuickByte's download queues at their scheduled time, whether or not QuickByte is running.</Description>
+    <ApplicationIcon>..\QuickByte.UI\Assets\quickbyte.ico</ApplicationIcon>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      The queue model, the schedule arithmetic and the repository all come from
+      Core, which is the point: the agent and the app must never disagree about
+      whether a queue is due, and the only way to guarantee that is for both to
+      run the same code over the same file.
+    -->
+    <ProjectReference Include="..\QuickByte.Core\QuickByte.Core.csproj" />
+  </ItemGroup>
+
+</Project>

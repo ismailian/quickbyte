@@ -17,7 +17,9 @@ internal static class Program
         var singleInstance = SingleInstance.Acquire();
         if (singleInstance is null)
         {
-            SingleInstance.SendToRunningInstance(SingleInstance.FindUrl(args) ?? string.Empty);
+            // Whatever this launch was for — a link, or a queue the scheduler
+            // agent says is due — goes to the copy that is already running.
+            SingleInstance.SendToRunningInstance(SingleInstance.BuildHandoffPayload(args));
             return;
         }
 
@@ -39,6 +41,7 @@ internal static class Program
             StartupRegistration.Sync(settingsService.Current.StartWithWindows);
 
             var repository = new DownloadRepository();
+            var queueRepository = new QueueRepository();
 
             // The protocol pair, and they must stay a pair: whichever provider
             // resolves a URL's size, the matching factory has to be the one that
@@ -59,6 +62,20 @@ internal static class Program
                 repository, settingsService, fileInfoProvider, connectionFactory, fileMerger, dispatcher);
 
             downloadManager.LoadPersistedDownloads();
+
+            // After the downloads: a queue's membership is a list of download
+            // ids, and until they exist a queue looks empty. Load() also starts
+            // the in-app schedule timer, which is what runs a due queue while the
+            // window is open — the agent below covers the hours it is not.
+            IQueueManager queueManager = new QueueManager(queueRepository, downloadManager, dispatcher);
+            queueManager.Load();
+
+            // Installs (or removes) the background scheduler that starts queues
+            // when QuickByte is closed. Re-asserted on every launch for the same
+            // reason StartupRegistration is: an update moves the executable, and
+            // a Run entry pointing at the old path is a scheduler that silently
+            // stopped working.
+            QueueAgentRegistration.Sync(queueManager.HasScheduledQueues);
 
             // Only meaningful once the list is loaded — until then every folder
             // looks unclaimed. Deliberately not awaited: it walks the temp
@@ -83,7 +100,8 @@ internal static class Program
             bool startMinimized = settingsService.Current.StartMinimized || HasMinimizedSwitch(args);
 
             var mainForm = new MainForm(
-                downloadManager, settingsService, updateService, fileInfoProvider, browserIntegration, startMinimized);
+                downloadManager, queueManager, settingsService, updateService, fileInfoProvider,
+                browserIntegration, startMinimized);
 
             // The pipe listener raises this on a thread-pool thread, so it goes
             // through the same dispatcher Core's events do rather than touching
@@ -101,6 +119,14 @@ internal static class Program
             // service and shown in Options; it must not stop the app.
             browserIntegration.Start();
 
+            // The agent starts QuickByte with --run-queue when a queue comes due
+            // and nothing was running to hear about it. Posted like everything
+            // else here: the manager raises its events through the dispatcher,
+            // and the message loop has not started yet.
+            Guid? startupQueueId = SingleInstance.FindQueueId(args);
+            if (startupQueueId is { } queueId)
+                dispatcher.Post(() => mainForm.StartQueueFromScheduler(queueId));
+
             // A URL passed to the *first* launch still deserves the Add window.
             string? startupUrl = SingleInstance.FindUrl(args);
             if (startupUrl is not null)
@@ -113,6 +139,10 @@ internal static class Program
                 dispatcher.Post(mainForm.NotifyStartedMinimized);
 
             Application.Run(mainForm);
+
+            // Stops the schedule timer and cancels any run still in flight. The
+            // downloads themselves are already paused by MainForm's close path.
+            queueManager.Dispose();
         }
     }
 

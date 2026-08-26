@@ -35,6 +35,13 @@ public sealed class DownloadManager : IDownloadManager
     // component that can see all of them. One limiter per download plus one for
     // the whole app; each pool gets a composite of its own and the global one.
     private readonly ConcurrentDictionary<Guid, BandwidthLimiter> _speedLimits = new();
+
+    // The queue tier. A separate limiter rather than a value folded into the one
+    // above: a download's own limit is the user's and is persisted, this one
+    // belongs to whichever queue is running it and has to be liftable without
+    // touching what the user chose.
+    private readonly ConcurrentDictionary<Guid, BandwidthLimiter> _queueSpeedLimits = new();
+
     private readonly BandwidthLimiter _globalSpeedLimit;
 
     public event EventHandler<DownloadListChangedEventArgs>? DownloadListChanged;
@@ -74,6 +81,12 @@ public sealed class DownloadManager : IDownloadManager
 
     public void SetGlobalSpeedLimit(long bytesPerSecond) =>
         _globalSpeedLimit.BytesPerSecond = bytesPerSecond;
+
+    public void SetQueueSpeedLimit(Guid downloadId, long bytesPerSecond)
+    {
+        if (_queueSpeedLimits.TryGetValue(downloadId, out var limiter))
+            limiter.BytesPerSecond = Math.Max(0, bytesPerSecond);
+    }
 
     public void SetSpeedLimit(Guid downloadId, long bytesPerSecond)
     {
@@ -187,7 +200,12 @@ public sealed class DownloadManager : IDownloadManager
 
         DownloadListChanged?.Invoke(this, new DownloadListChangedEventArgs { ChangeType = DownloadListChangeType.Added, Item = item });
 
-        await StartAsync(item.Id).ConfigureAwait(false);
+        // A download destined for a queue is added and left alone: the queue
+        // decides when it runs, and starting it here would be the one thing the
+        // user asked not to happen by choosing a queue at all.
+        if (request.StartImmediately)
+            await StartAsync(item.Id).ConfigureAwait(false);
+
         return item;
     }
 
@@ -196,8 +214,14 @@ public sealed class DownloadManager : IDownloadManager
         var speedLimit = new BandwidthLimiter(item.SpeedLimitBytesPerSecond);
         _speedLimits[item.Id] = speedLimit;
 
+        // Starts unlimited and stays that way unless a queue claims the download:
+        // an unset limiter short-circuits before taking a lock, so the tier costs
+        // nothing for the downloads that are in no queue.
+        var queueSpeedLimit = new BandwidthLimiter();
+        _queueSpeedLimits[item.Id] = queueSpeedLimit;
+
         var poolManager = new ConnectionPoolManager(
-            _connectionFactory, new CompositeBandwidthLimiter(speedLimit, _globalSpeedLimit));
+            _connectionFactory, new CompositeBandwidthLimiter(speedLimit, queueSpeedLimit, _globalSpeedLimit));
         var service = new DownloadService(item, poolManager, _fileMerger, _fileInfoProvider, _settingsService, PersistItem);
 
         service.ProgressChanged += (_, e) => _dispatcher.Post(() => ProgressChanged?.Invoke(this, e));
@@ -269,6 +293,7 @@ public sealed class DownloadManager : IDownloadManager
         }
 
         _speedLimits.TryRemove(downloadId, out _);
+        _queueSpeedLimits.TryRemove(downloadId, out _);
 
         if (_items.TryRemove(downloadId, out var item))
         {
