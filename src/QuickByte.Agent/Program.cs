@@ -48,7 +48,7 @@ internal static class Program
         // write its last log line.
         AppDomain.CurrentDomain.ProcessExit += (_, _) => cancellation.Cancel();
 
-        var loop = new SchedulerLoop(new QueueRepository());
+        var loop = new SchedulerLoop(new QueueRepository(), new QuickByteApp());
 
         if (HasSwitch(args, "--once"))
         {
@@ -76,6 +76,11 @@ internal static class Program
         return 0;
     }
 
-    private static bool HasSwitch(IEnumerable<string> args, string name) =>
+    /// <summary>
+    /// Whether a switch is present, whatever the shell did to it on the way in:
+    /// the Run key hands this process a quoted command line, and a hand-typed
+    /// <c>--Once</c> means the same thing as <c>--once</c>.
+    /// </summary>
+    internal static bool HasSwitch(IEnumerable<string> args, string name) =>
         args.Any(argument => string.Equals(argument.Trim().Trim('"'), name, StringComparison.OrdinalIgnoreCase));
 }

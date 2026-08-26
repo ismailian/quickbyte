@@ -26,6 +26,16 @@ internal sealed class SchedulerLoop
     private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(30);
 
     private readonly IQueueRepository _repository;
+    private readonly IAppLauncher _app;
+
+    /// <summary>
+    /// The clock, as a function rather than a bare <see cref="DateTime.Now"/> in
+    /// the middle of the pass — the same reason every <see cref="QueueSchedule"/>
+    /// method takes <c>now</c> as a parameter. "Is this queue due?" is only
+    /// answerable against a stated time, and only checkable against one that
+    /// stands still.
+    /// </summary>
+    private readonly Func<DateTime> _clock;
 
     /// <summary>
     /// The window start each queue was last launched for. Belt to
@@ -38,7 +48,12 @@ internal sealed class SchedulerLoop
 
     private bool _loggedUnreadable;
 
-    public SchedulerLoop(IQueueRepository repository) => _repository = repository;
+    public SchedulerLoop(IQueueRepository repository, IAppLauncher app, Func<DateTime>? clock = null)
+    {
+        _repository = repository;
+        _app = app;
+        _clock = clock ?? (() => DateTime.Now);
+    }
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -83,7 +98,7 @@ internal sealed class SchedulerLoop
         foreach (var staleId in _launched.Keys.Where(id => scheduled.All(queue => queue.Id != id)).ToList())
             _launched.Remove(staleId);
 
-        var now = DateTime.Now;
+        var now = _clock();
         foreach (var queue in scheduled)
         {
             if (!queue.IsDue(now)) continue;
@@ -92,7 +107,7 @@ internal sealed class SchedulerLoop
             if (_launched.TryGetValue(queue.Id, out var alreadyLaunched) && alreadyLaunched == windowStart)
                 continue;
 
-            if (QuickByteApp.IsRunning)
+            if (_app.IsRunning)
             {
                 // QuickByte is up, and it runs the same schedule check itself.
                 // Launching a second process would only be handed straight back
@@ -101,7 +116,7 @@ internal sealed class SchedulerLoop
                 continue;
             }
 
-            if (QuickByteApp.TryLaunchForQueue(queue.Id, out string? error))
+            if (_app.TryLaunchForQueue(queue.Id, out string? error))
             {
                 _launched[queue.Id] = windowStart;
                 AgentLog.Write($"started QuickByte for queue '{queue.Name}' (scheduled {windowStart:g})");
@@ -126,53 +141,71 @@ internal sealed class SchedulerLoop
 }
 
 /// <summary>
+/// Starting the download manager, as the loop needs to see it: is it already up,
+/// and can it be launched for a queue.
+///
+/// An interface over what would otherwise be two static calls, because both are
+/// things the loop has to decide <em>without</em> doing them. Whether a due
+/// queue is launched, stood down on, or left for the next tick is the agent's
+/// entire behaviour, and it cannot be checked by starting processes.
+/// </summary>
+internal interface IAppLauncher
+{
+    /// <summary>Whether QuickByte is already running, and so will start the queue itself.</summary>
+    bool IsRunning { get; }
+
+    /// <summary>Starts QuickByte on the given queue, reporting why if it could not.</summary>
+    bool TryLaunchForQueue(Guid queueId, out string? error);
+}
+
+/// <summary>
 /// Finding and starting the download manager itself. Both halves deliberately
 /// avoid the registry: the agent is installed beside QuickByte.exe and can
 /// simply look next to itself, and a scheduler that reads a path out of the Run
 /// key would start whatever that key happened to point at.
 /// </summary>
-internal static class QuickByteApp
+internal sealed class QuickByteApp : IAppLauncher
 {
-    private const string ExecutableName = "QuickByte.exe";
+    internal const string ExecutableName = "QuickByte.exe";
 
     /// <summary>
     /// The mutex QuickByte's <c>SingleInstance</c> holds for as long as it runs.
     /// Opening it is the cheapest possible "is the app up?", and it is the same
     /// name a second launch would collide with.
     /// </summary>
-    private const string AppMutexName = @"Local\QuickByte.SingleInstance";
+    internal const string AppMutexName = @"Local\QuickByte.SingleInstance";
 
-    public static bool IsRunning
+    public bool IsRunning => IsMutexPresent(AppMutexName);
+
+    /// <summary>
+    /// Whether a named mutex exists at this moment. Named apart from
+    /// <see cref="IsRunning"/> so the probe can be exercised against a mutex a
+    /// caller owns, rather than against whatever happens to be running on the
+    /// machine.
+    /// </summary>
+    internal static bool IsMutexPresent(string name)
     {
-        get
+        try
         {
-            try
-            {
-                using var mutex = Mutex.OpenExisting(AppMutexName);
-                return true;
-            }
-            catch (WaitHandleCannotBeOpenedException)
-            {
-                return false;
-            }
-            catch
-            {
-                // Anything else (an access denial from a stricter session) is not
-                // worth guessing about: treat the app as absent and launch it.
-                // A launch that turns out to be redundant hands itself over and
-                // exits, which is exactly what a second launch is for.
-                return false;
-            }
+            using var mutex = Mutex.OpenExisting(name);
+            return true;
+        }
+        catch (WaitHandleCannotBeOpenedException)
+        {
+            return false;
+        }
+        catch
+        {
+            // Anything else (an access denial from a stricter session) is not
+            // worth guessing about: treat the app as absent and launch it.
+            // A launch that turns out to be redundant hands itself over and
+            // exits, which is exactly what a second launch is for.
+            return false;
         }
     }
 
-    /// <summary>
-    /// Starts QuickByte on the given queue. <c>--minimized</c> is not optional
-    /// here: this launch was asked for by a clock, not by a person, and a window
-    /// appearing over whatever the user is doing at 03:00 — or at sign-in — is
-    /// not what a schedule promised.
-    /// </summary>
-    public static bool TryLaunchForQueue(Guid queueId, out string? error)
+    /// <summary>Starts QuickByte on the given queue.</summary>
+    public bool TryLaunchForQueue(Guid queueId, out string? error)
     {
         error = null;
 
@@ -185,17 +218,7 @@ internal static class QuickByteApp
 
         try
         {
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = executable,
-                WorkingDirectory = AppContext.BaseDirectory,
-                UseShellExecute = false
-            };
-            startInfo.ArgumentList.Add("--run-queue");
-            startInfo.ArgumentList.Add(queueId.ToString("D"));
-            startInfo.ArgumentList.Add("--minimized");
-
-            using var process = Process.Start(startInfo);
+            using var process = Process.Start(BuildStartInfo(executable, queueId));
             return process is not null;
         }
         catch (Exception ex)
@@ -203,5 +226,30 @@ internal static class QuickByteApp
             error = ex.Message;
             return false;
         }
+    }
+
+    /// <summary>
+    /// The command line QuickByte is started with. <c>--minimized</c> is not
+    /// optional here: this launch was asked for by a clock, not by a person, and
+    /// a window appearing over whatever the user is doing at 03:00 — or at
+    /// sign-in — is not what a schedule promised.
+    ///
+    /// The switch and the id's format are what <c>UI/SingleInstance.FindQueueId</c>
+    /// reads on the other side, so this shape is a contract between two
+    /// processes rather than a detail of this one — which is why it is built
+    /// where it can be inspected without a launch.
+    /// </summary>
+    internal static ProcessStartInfo BuildStartInfo(string executable, Guid queueId)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = executable,
+            WorkingDirectory = AppContext.BaseDirectory,
+            UseShellExecute = false
+        };
+        startInfo.ArgumentList.Add("--run-queue");
+        startInfo.ArgumentList.Add(queueId.ToString("D"));
+        startInfo.ArgumentList.Add("--minimized");
+        return startInfo;
     }
 }

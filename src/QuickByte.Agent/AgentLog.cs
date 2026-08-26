@@ -17,7 +17,13 @@ internal static class AgentLog
 
     private static readonly object Sync = new();
 
-    private static string LogPath => Path.Combine(
+    /// <summary>
+    /// Where the line goes. Settable only so the tests can point it at a scratch
+    /// file: this log is the one place the agent's decisions are observable, and
+    /// a test run has no business appending to — or, past the cap, deleting —
+    /// the user's real agent.log.
+    /// </summary>
+    internal static string LogPath { get; set; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "QuickByte", "agent.log");
 
     public static void Write(string message)

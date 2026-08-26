@@ -30,4 +30,14 @@
     <ProjectReference Include="..\QuickByte.Core\QuickByte.Core.csproj" />
   </ItemGroup>
 
+  <!--
+    Everything in this assembly is internal — it is an executable, and nothing
+    links against it. The scheduling decisions are the whole product, though, so
+    the test assembly is let in rather than any of it being made public for the
+    sake of being tested.
+  -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="QuickByte.Agent.Tests" />
+  </ItemGroup>
+
 </Project>
