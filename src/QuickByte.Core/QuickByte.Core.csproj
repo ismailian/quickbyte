@@ -28,4 +28,15 @@
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
   </ItemGroup>
 
+  <!--
+    The protocol-dispatch helpers (FtpUrl), the FTP reply parser and
+    HttpRequestDecorator are internal because nothing outside the engine has any
+    business calling them — but they carry real logic (Basic auth encoding, the
+    Range/Authorization headers a captured request must not keep, REST support
+    detection) that is worth a test of its own.
+  -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="QuickByte.Core.Tests" />
+  </ItemGroup>
+
 </Project>

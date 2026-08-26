@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      Matches QuickByte.Core exactly. The engine targets net8.0-windows (DPAPI in
+      SecretProtector, and the WindowsDesktop shared framework it is loaded into),
+      so the tests have to run on the same framework to exercise it.
+    -->
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <PlatformTarget>x64</PlatformTarget>
+
+    <RootNamespace>QuickByte.Core.Tests</RootNamespace>
+    <AssemblyName>QuickByte.Core.Tests</AssemblyName>
+
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <!--
+    These are the only packages in the repository that deploy a DLL, and they are
+    deliberately confined to this project: it is never referenced by
+    QuickByte.UI, so nothing here reaches src/QuickByte.UI/bin/Release and the
+    installer's [Files] list is unaffected. See CLAUDE.md on why that matters.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\QuickByte.Core\QuickByte.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>
