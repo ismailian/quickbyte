@@ -23,10 +23,15 @@ namespace QuickByte.UI;
 /// </summary>
 internal static class StartupRegistration
 {
-    private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    /// <summary>
+    /// The autostart key. Settable only so the tests can work in a scratch key
+    /// of their own: everything below reads and writes the real one, and a test
+    /// run has no business deleting the entry that starts the user's QuickByte.
+    /// </summary>
+    internal static string RunKeyPath { get; set; } = @"Software\Microsoft\Windows\CurrentVersion\Run";
 
     /// <summary>Value name under the Run key. Also the label Task Manager shows.</summary>
-    private const string ValueName = "QuickByte";
+    internal const string ValueName = "QuickByte";
 
     /// <summary>
     /// Quoted, because <c>Run</c> values are command lines: an unquoted path

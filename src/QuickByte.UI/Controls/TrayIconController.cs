@@ -104,12 +104,23 @@ public sealed class TrayIconController : IDisposable
     /// </summary>
     public void UpdateTooltip(int activeCount, double totalSpeedBytesPerSecond)
     {
+        string text = TooltipText(activeCount, totalSpeedBytesPerSecond);
+        if (_notifyIcon.Text != text) _notifyIcon.Text = text;
+    }
+
+    /// <summary>
+    /// The tip itself. Separate from the assignment above because the length
+    /// limit is the whole point of it — <see cref="NotifyIcon.Text"/> throws
+    /// rather than trimming — and a limit that is only enforced against a live
+    /// tray icon is one nothing can check.
+    /// </summary>
+    internal static string TooltipText(int activeCount, double totalSpeedBytesPerSecond)
+    {
         string text = activeCount == 0
             ? "QuickByte — idle"
             : $"QuickByte — {activeCount} active · {ByteFormatter.FormatSpeed(totalSpeedBytesPerSecond)}";
 
-        if (text.Length > MaxTooltipLength) text = text[..MaxTooltipLength];
-        if (_notifyIcon.Text != text) _notifyIcon.Text = text;
+        return text.Length > MaxTooltipLength ? text[..MaxTooltipLength] : text;
     }
 
     /// <summary>

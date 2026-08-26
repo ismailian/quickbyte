@@ -28,15 +28,20 @@ namespace QuickByte.UI;
 /// </summary>
 internal static class QueueAgentRegistration
 {
-    private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    /// <summary>
+    /// The autostart key, settable for the tests for the same reason
+    /// <see cref="StartupRegistration.RunKeyPath"/> is — and with the same
+    /// caveat: the real one is the user's, and a test must not write to it.
+    /// </summary>
+    internal static string RunKeyPath { get; set; } = @"Software\Microsoft\Windows\CurrentVersion\Run";
 
     /// <summary>Value name under the Run key, and the label Task Manager shows.</summary>
-    private const string ValueName = "QuickByteScheduler";
+    internal const string ValueName = "QuickByteScheduler";
 
-    private const string AgentFileName = "QuickByte.Agent.exe";
+    internal const string AgentFileName = "QuickByte.Agent.exe";
 
     /// <summary>Held by the agent for its whole life — see its Program.cs.</summary>
-    private const string AgentMutexName = @"Local\QuickByte.QueueAgent";
+    internal const string AgentMutexName = @"Local\QuickByte.QueueAgent";
 
     /// <summary>
     /// The agent as installed beside this executable. Resolved from the running
@@ -128,7 +133,12 @@ internal static class QueueAgentRegistration
         }
     }
 
-    private static void Register(bool enabled)
+    /// <summary>
+    /// The registry half of <see cref="Sync"/>, on its own. Internal rather than
+    /// private so it can be tested without the other half, which starts a
+    /// process.
+    /// </summary>
+    internal static void Register(bool enabled)
     {
         try
         {

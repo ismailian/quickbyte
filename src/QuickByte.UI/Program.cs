@@ -151,7 +151,7 @@ internal static class Program
     /// wants a quiet launch without the setting being on — a shortcut, a
     /// scheduled task, or a test run.
     /// </summary>
-    private static bool HasMinimizedSwitch(IEnumerable<string> args) =>
+    internal static bool HasMinimizedSwitch(IEnumerable<string> args) =>
         args.Any(argument => argument.Trim().Trim('"')
             is "--minimized" or "-minimized" or "/minimized" or "-m");
 }

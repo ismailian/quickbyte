@@ -25,6 +25,16 @@
     <ProjectReference Include="..\QuickByte.Core\QuickByte.Core.csproj" />
   </ItemGroup>
 
+  <!--
+    The forms are not testable and are not tested (see CLAUDE.md), but the
+    non-visual half of this project is: the command line the shell and the agent
+    hand it, the Run-key entries, the icon writer, the progress easing. Those
+    types are internal because nothing links against an executable.
+  -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="QuickByte.UI.Tests" />
+  </ItemGroup>
+
   <ItemGroup>
     <None Update="Assets\quickbyte.ico">
       <Pack>True</Pack>
