@@ -30,4 +30,14 @@ public interface IUpdateService
         UpdateManifest manifest,
         IProgress<UpdateDownloadProgress>? progress = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Deletes installers an earlier run downloaded and left in the temp folder,
+    /// returning how many went. Setup can't delete the file it is running from
+    /// and the app that fetched it has already exited, so a startup sweep is the
+    /// only thing that ever collects them — call it once, unawaited, the way
+    /// <see cref="IDownloadManager.CleanupOrphanedTempFoldersAsync"/> is called.
+    /// Never throws: anything still locked is left for the next launch.
+    /// </summary>
+    Task<int> CleanupDownloadedInstallersAsync(CancellationToken cancellationToken = default);
 }

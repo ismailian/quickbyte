@@ -213,6 +213,11 @@ the running process holds open. The installer is fetched to
 `sha256` when the manifest supplies one; a mismatched or partial download is
 deleted rather than left on disk.
 
+A completed update leaves its installer there as well — setup cannot delete the
+file it is running from, and QuickByte is gone by then — so the next launch
+sweeps the folder, retrying briefly in case setup is still finishing, and removes
+the folder once it is empty.
+
 ## Protocols and authentication
 
 `ProtocolFileInfoProvider` and `ProtocolConnectionFactory` pick an

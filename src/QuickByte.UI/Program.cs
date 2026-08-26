@@ -65,6 +65,14 @@ internal static class Program
             // volume, and nothing on screen depends on the result.
             _ = downloadManager.CleanupOrphanedTempFoldersAsync();
 
+            // If the last run updated itself, the installer it handed to the
+            // shell is still sitting in %TEMP%: setup cannot delete the file it
+            // is executing from, and by then this app had already exited. This
+            // launch is the first moment that file is finished with. Unawaited
+            // for the same reason as the sweep above — it retries for a few
+            // seconds in case setup is still letting go of it.
+            _ = updateService.CleanupDownloadedInstallersAsync();
+
             using IBrowserIntegrationService browserIntegration = new BrowserIntegrationServer(settingsService);
 
             // A launch that goes straight to the notification area, either

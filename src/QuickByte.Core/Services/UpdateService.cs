@@ -33,6 +33,12 @@ public sealed class UpdateService : IUpdateService
 
     private const int BufferSize = 81920;
 
+    /// <summary>Names every file <see cref="DownloadInstallerAsync"/> can write.</summary>
+    private const string InstallerPattern = "QuickByte-*-Setup.exe";
+
+    private const int CleanupAttempts = 5;
+    private const int CleanupRetryDelayMilliseconds = 2000;
+
     private static readonly HttpClient Client = new(new SocketsHttpHandler
     {
         PooledConnectionLifetime = TimeSpan.FromMinutes(10)
@@ -47,6 +53,13 @@ public sealed class UpdateService : IUpdateService
     };
 
     private readonly string _downloadFolder;
+
+    /// <summary>
+    /// The installer this process fetched, if any. Kept for the lifetime of the
+    /// process so the cleanup sweep can't delete the file the user is about to
+    /// be handed: it is only stale from the <em>next</em> launch's point of view.
+    /// </summary>
+    private volatile string? _installerThisSession;
 
     /// <param name="manifestUrl">
     /// Overridable only so a release can be staged against a test endpoint; the
@@ -101,10 +114,18 @@ public sealed class UpdateService : IUpdateService
         var uri = ResolveInstallerUri(manifest);
 
         Directory.CreateDirectory(_downloadFolder);
-        PurgeStaleInstallers();
+
+        // Whatever is already in there belongs to an earlier update and is dead
+        // weight the moment this one lands; %TEMP% is nobody's idea of a release
+        // archive.
+        PurgeInstallers();
 
         string targetPath = Path.Combine(_downloadFolder,
             $"QuickByte-{FileNameHelper.SanitizeFileName(manifest.Version)}-Setup.exe");
+
+        // Claimed before the first byte, so a cleanup sweep still retrying in
+        // the background walks past this file instead of deleting it.
+        _installerThisSession = targetPath;
 
         // HttpClient.Timeout is a whole-request budget, and the shared client's
         // 30 s is sized for a manifest fetch, not a multi-megabyte installer.
@@ -215,25 +236,93 @@ public sealed class UpdateService : IUpdateService
     }
 
     /// <summary>
-    /// Drops installers left by earlier updates. They are dead weight the moment
-    /// a newer one is fetched, and %TEMP% is nobody's idea of a release archive.
+    /// Deletes installers left in the update folder by earlier runs, and removes
+    /// the folder once it is empty.
+    ///
+    /// Nothing else is in a position to: setup cannot delete the file it is
+    /// executing from, and the QuickByte that fetched it has already exited by
+    /// then — that is the whole point of exiting. So an update leaves a
+    /// multi-megabyte .exe in %TEMP% behind it, and the next launch is the first
+    /// moment that file is both finished with and unlocked.
+    ///
+    /// Best-effort throughout, like every other cleanup path here: a locked or
+    /// vanished file is skipped, not reported. Anything that survives is picked
+    /// up by the launch after this one.
     /// </summary>
-    private void PurgeStaleInstallers()
+    public async Task<int> CleanupDownloadedInstallersAsync(CancellationToken cancellationToken = default)
+    {
+        int deleted = 0;
+
+        for (int attempt = 0; attempt < CleanupAttempts; attempt++)
+        {
+            // The first pass is immediate. The retries exist for the launch
+            // setup itself performs: it starts the new QuickByte and only then
+            // finishes and releases its own file, so the first delete of that
+            // one loses the race by a second or two.
+            if (attempt > 0)
+            {
+                try
+                {
+                    await Task.Delay(CleanupRetryDelayMilliseconds, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) { break; }
+            }
+
+            var (removed, remaining) = PurgeInstallers();
+            deleted += removed;
+            if (remaining == 0) break;
+        }
+
+        TryRemoveFolderIfEmpty();
+        return deleted;
+    }
+
+    /// <summary>
+    /// Deletes every installer in the update folder bar one this process
+    /// downloaded, reporting how many are still there afterwards so the caller
+    /// knows whether another attempt is worth making.
+    /// </summary>
+    private (int Deleted, int Remaining) PurgeInstallers()
+    {
+        if (!Directory.Exists(_downloadFolder)) return (0, 0);
+
+        string[] files;
+        try { files = Directory.GetFiles(_downloadFolder, InstallerPattern); }
+        catch { return (0, 0); /* best-effort */ }
+
+        string? keep = _installerThisSession;
+        int deleted = 0, remaining = 0;
+
+        foreach (string file in files)
+        {
+            if (keep is not null && string.Equals(file, keep, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (TryDelete(file)) deleted++;
+            else remaining++;
+        }
+
+        return (deleted, remaining);
+    }
+
+    private void TryRemoveFolderIfEmpty()
     {
         try
         {
-            foreach (string file in Directory.EnumerateFiles(_downloadFolder, "QuickByte-*-Setup.exe"))
-                TryDelete(file);
+            if (Directory.Exists(_downloadFolder) && !Directory.EnumerateFileSystemEntries(_downloadFolder).Any())
+                Directory.Delete(_downloadFolder);
         }
         catch { /* best-effort */ }
     }
 
-    private static void TryDelete(string path)
+    /// <returns><c>true</c> when the file is gone, whether or not this call is what removed it.</returns>
+    private static bool TryDelete(string path)
     {
         try
         {
             if (File.Exists(path)) File.Delete(path);
+            return true;
         }
-        catch { /* best-effort */ }
+        catch { return false; /* best-effort */ }
     }
 }
