@@ -34,9 +34,12 @@ public sealed class SpeedCalculator
     /// <summary>Bytes per second, smoothed over the configured window.</summary>
     public double GetSpeedBytesPerSecond()
     {
-        if (_samples.Count < 2) return 0;
-
+        // Length is read off the snapshot, not off the queue: the count can drop
+        // between the two as AddSample prunes the window on another thread, and
+        // this then indexes an array that is shorter than the check promised.
         var arr = _samples.ToArray();
+        if (arr.Length < 2) return 0;
+
         var first = arr[0];
         var last = arr[^1];
 

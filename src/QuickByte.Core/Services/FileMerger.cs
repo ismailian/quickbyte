@@ -31,6 +31,11 @@ public sealed class FileMerger : IFileMerger
         await using var destination = new FileStream(
             destinationFilePath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize, useAsync: true);
 
+        // One buffer for the whole merge rather than one per chunk: with 32
+        // connections and an 80 KB buffer that was 32 large-object allocations
+        // for no reason — nothing survives an iteration.
+        var buffer = new byte[bufferSize];
+
         foreach (var chunkPath in orderedChunkPaths)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -38,7 +43,6 @@ public sealed class FileMerger : IFileMerger
             await using var source = new FileStream(
                 chunkPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize, useAsync: true);
 
-            var buffer = new byte[bufferSize];
             int bytesRead;
             while ((bytesRead = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
             {

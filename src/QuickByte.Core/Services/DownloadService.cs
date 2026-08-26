@@ -64,6 +64,9 @@ public sealed class DownloadService : IDownloadService
         {
             if (Item.Status is DownloadStatus.Downloading or DownloadStatus.Connecting) return;
 
+            // The previous run's source is finished with — a download paused and
+            // resumed a dozen times would otherwise leave a dozen behind.
+            _cts?.Dispose();
             _cts = new CancellationTokenSource();
             SetStatus(DownloadStatus.Connecting);
 
@@ -104,7 +107,13 @@ public sealed class DownloadService : IDownloadService
 
         if (!completed)
         {
-            SetStatus(DownloadStatus.Failed, "One or more connections failed after exhausting retries.");
+            // Prefer what actually went wrong. OnPoolConnectionFailed records the
+            // first connection's own message, and SetStatus(Connecting) cleared
+            // the field at the top of this run, so anything in it belongs to this
+            // attempt. "404 (Not Found)" is a message a user can act on; the
+            // generic line below is one they can only report.
+            SetStatus(DownloadStatus.Failed,
+                Item.ErrorMessage ?? "One or more connections failed after exhausting retries.");
             return;
         }
 
@@ -118,7 +127,15 @@ public sealed class DownloadService : IDownloadService
 
         string destination = Item.FullPath;
         var chunkPaths = _poolManager.GetOrderedChunkPaths();
-        var mergeProgress = new Progress<long>(merged =>
+
+        // Deliberately not Progress<T>. That posts to the captured
+        // SynchronizationContext and silently falls back to the thread pool when
+        // there is none — and this runs on a pool thread, where there is none. The
+        // reports then arrive out of order and the merge percentage walks
+        // backwards. Nothing here needs marshaling anyway: DownloadManager wraps
+        // every re-published event in _dispatcher.Post, exactly as it does for the
+        // pool's own progress timer.
+        var mergeProgress = new InlineProgress(merged =>
         {
             double percentage = Item.TotalBytes > 0
                 ? Math.Clamp(merged * 100.0 / Item.TotalBytes, 0, 100)
@@ -135,7 +152,7 @@ public sealed class DownloadService : IDownloadService
             });
         });
 
-        await _fileMerger.MergeAsync(chunkPaths, destination, _settingsService.Current.StreamBufferSizeBytes, mergeProgress, token)
+        await _fileMerger.MergeAsync(chunkPaths, destination, _settingsService.Current.ClampBufferSize(), mergeProgress, token)
             .ConfigureAwait(false);
 
         _fileMerger.CleanupChunks(chunkPaths, Item.TempFolderPath);
@@ -162,6 +179,14 @@ public sealed class DownloadService : IDownloadService
     public void Stop()
     {
         _cts?.Cancel();
+
+        // A finished download has nothing to cancel and no chunks left to
+        // discard. Rewriting it as Cancelled is not harmless: DownloadManager
+        // calls Stop() on its way through Remove(), so removing a completed
+        // download used to persist it as cancelled and announce that status to
+        // every open window a moment before the row disappeared.
+        if (Item.Status == DownloadStatus.Completed) return;
+
         SetStatus(DownloadStatus.Cancelled);
         ScheduleTempFolderDeletion();
     }
@@ -237,6 +262,20 @@ public sealed class DownloadService : IDownloadService
             NewStatus = newStatus,
             ErrorMessage = errorMessage
         });
+    }
+
+    /// <summary>
+    /// An <see cref="IProgress{T}"/> that runs its callback on the thread that
+    /// reported, in the order the reports were made. See the note at its one use
+    /// site for why <see cref="Progress{T}"/> is the wrong tool here.
+    /// </summary>
+    private sealed class InlineProgress : IProgress<long>
+    {
+        private readonly Action<long> _report;
+
+        public InlineProgress(Action<long> report) => _report = report;
+
+        public void Report(long value) => _report(value);
     }
 
     public void Dispose()

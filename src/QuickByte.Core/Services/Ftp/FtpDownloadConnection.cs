@@ -31,7 +31,10 @@ public sealed class FtpDownloadConnection : IDownloadConnection
     private readonly DownloadCredentials? _credentials;
 
     private long _bytesDownloaded;
-    private int _retryCount;
+
+    // Volatile for the same reason _status is: it is written on the thread
+    // running the transfer and read by the pool's report timer.
+    private volatile int _retryCount;
     private volatile ConnectionStatus _status = ConnectionStatus.Idle;
     private volatile string? _lastError;
 
@@ -69,6 +72,13 @@ public sealed class FtpDownloadConnection : IDownloadConnection
     }
 
     private long TotalBytes => RangeEnd - RangeStart + 1;
+
+    /// <summary>
+    /// True when this connection was handed no real end — see
+    /// <see cref="RangeSplitter.UnboundedEnd"/>. The data connection closing is
+    /// then the end of the file rather than a transfer cut short.
+    /// </summary>
+    private bool IsUnbounded => RangeEnd == RangeSplitter.UnboundedEnd;
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -129,15 +139,17 @@ public sealed class FtpDownloadConnection : IDownloadConnection
 
         Directory.CreateDirectory(Path.GetDirectoryName(ChunkFilePath)!);
 
+        int bufferSize = _settings.ClampBufferSize();
+
         // OpenOrCreate + seek rather than Append: the same file is reopened on
         // every resume and must not be truncated, and the offset is derived from
         // what is already in it.
         using var fileStream = new FileStream(
             ChunkFilePath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read,
-            _settings.StreamBufferSizeBytes, useAsync: true);
+            bufferSize, useAsync: true);
         fileStream.Seek(start - RangeStart, SeekOrigin.Begin);
 
-        var buffer = new byte[_settings.StreamBufferSizeBytes];
+        var buffer = new byte[bufferSize];
         while (remaining > 0)
         {
             // Ask before reading, exactly as the HTTP connection does, so the
@@ -170,7 +182,7 @@ public sealed class FtpDownloadConnection : IDownloadConnection
         // A stream that ended early left the segment short. Reported as a failure
         // so the retry policy gets a turn — silently accepting it would hand the
         // merger a chunk full of zeroes at the tail.
-        if (remaining > 0 && RangeEnd != long.MaxValue - 1)
+        if (remaining > 0 && !IsUnbounded)
             throw new IOException($"The FTP data connection ended {remaining} bytes early.");
     }
 

@@ -7,6 +7,19 @@ namespace QuickByte.Core.Helpers;
 /// </summary>
 public static class RangeSplitter
 {
+    /// <summary>
+    /// The end of a range that has no known end — the single connection given to
+    /// a file whose size the server never disclosed.
+    ///
+    /// It lives here, with the rest of the engine's range vocabulary, because
+    /// three places have to agree on it: the pool invents it, and both the HTTP
+    /// and FTP connections have to recognise it to know that "the stream ended"
+    /// is a completed segment rather than a truncated one. Spelled out as
+    /// <c>long.MaxValue - 1</c> in each of them, it was a magic number that had
+    /// to be kept in step by hand.
+    /// </summary>
+    public const long UnboundedEnd = long.MaxValue - 1;
+
     public readonly record struct Range(long Start, long End);
 
     public static IReadOnlyList<Range> Split(long totalBytes, int connectionsCount)

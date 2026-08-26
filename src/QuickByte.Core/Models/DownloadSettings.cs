@@ -42,7 +42,17 @@ public sealed class DownloadSettings
     /// </summary>
     public int ProgressUpdateIntervalMilliseconds { get; set; } = 100;
 
-    /// <summary>Buffer size (bytes) used for stream copy operations.</summary>
+    public const int MinBufferSizeBytes = 4 * 1024;
+    public const int MaxBufferSizeBytes = 8 * 1024 * 1024;
+
+    /// <summary>
+    /// Buffer size (bytes) used for stream copy operations. It has no field in
+    /// Options, which is exactly why every consumer runs it through
+    /// <see cref="ClampBufferSize"/>: the only way it can hold a number is by
+    /// being edited into settings.json, and a 0 there would otherwise reach a
+    /// <c>new byte[…]</c> and a FileStream constructor and break every download
+    /// with an error that names none of this.
+    /// </summary>
     public int StreamBufferSizeBytes { get; set; } = 81920; // 80 KB
 
     /// <summary>Maximum number of downloads actively running at once (queue throttling).</summary>
@@ -98,4 +108,11 @@ public sealed class DownloadSettings
 
     public int ClampConnections(int requested) =>
         Math.Clamp(requested, MinConnections, MaxConnections);
+
+    /// <summary>
+    /// <see cref="StreamBufferSizeBytes"/> made safe to hand to a buffer
+    /// allocation or a <see cref="FileStream"/>. See that property for why.
+    /// </summary>
+    public int ClampBufferSize() =>
+        Math.Clamp(StreamBufferSizeBytes, MinBufferSizeBytes, MaxBufferSizeBytes);
 }

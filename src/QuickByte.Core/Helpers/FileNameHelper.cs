@@ -55,6 +55,28 @@ public static class FileNameHelper
         ["video/x-msvideo"] = "avi"
     };
 
+    /// <summary>
+    /// Names Windows reserves for devices. They are not files at any extension —
+    /// <c>NUL.txt</c> is the null device just as much as <c>NUL</c> is — and
+    /// opening one succeeds, so a download named after one silently writes its
+    /// bytes to the device instead of to the disk.
+    /// </summary>
+    private static readonly HashSet<string> ReservedDeviceNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+    };
+
+    /// <summary>
+    /// Longest name kept. MAX_PATH is 260 characters for the <em>whole</em> path,
+    /// and the download folder, its separator and a " (12)" collision suffix all
+    /// come out of the same budget — so a server answering with a 400-character
+    /// <c>Content-Disposition</c> must not be the reason the download fails at
+    /// the moment the file is created, several minutes of transfer later.
+    /// </summary>
+    private const int MaxFileNameLength = 180;
+
     public static string SanitizeFileName(string name)
     {
         // A server-supplied name may carry a path — deliberately, in the case of
@@ -68,9 +90,36 @@ public static class FileNameHelper
         foreach (char c in Path.GetInvalidFileNameChars())
             name = name.Replace(c, '_');
 
-        // "." and ".." survive the loop above intact and are not file names.
-        if (name.Length == 0 || name.All(c => c == '.')) return "download";
-        return name;
+        // Trailing dots and spaces are legal on the wire and not part of a
+        // Windows file name: the shell drops them when the file is created, so a
+        // name kept with them would stop matching the file that actually appears
+        // — and every later File.Exists on it. Dropping them here also disposes
+        // of "." and "..", which survive the loop above intact.
+        name = name.TrimEnd('.', ' ');
+        if (name.Length == 0) return "download";
+
+        name = Shorten(name);
+
+        return IsReservedDeviceName(name) ? "_" + name : name;
+    }
+
+    private static string Shorten(string name)
+    {
+        if (name.Length <= MaxFileNameLength) return name;
+
+        // An "extension" that is most of the name is not one — a query string
+        // that came through as part of a segment, say. Truncating the stem to
+        // nothing in order to preserve it helps nobody.
+        string extension = Path.GetExtension(name);
+        if (extension.Length > 12) extension = string.Empty;
+
+        return name[..(MaxFileNameLength - extension.Length)].TrimEnd('.', ' ') + extension;
+    }
+
+    private static bool IsReservedDeviceName(string name)
+    {
+        int dot = name.IndexOf('.');
+        return ReservedDeviceNames.Contains(dot < 0 ? name : name[..dot]);
     }
 
     /// <summary>

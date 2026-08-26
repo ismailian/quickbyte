@@ -562,7 +562,12 @@ public sealed class QueueManager : IQueueManager
 
     private void RaiseQueuesChanged(QueueChangeType changeType, DownloadQueue? queue)
     {
-        var snapshot = queue?.Clone();
+        // Cloned under the lock. Every caller reaches here holding a reference to
+        // the *live* queue and having already left the lock, so copying its
+        // ItemIds list races anything editing membership on another thread —
+        // List<T>'s copy constructor reads Count and then CopyTo.
+        DownloadQueue? snapshot;
+        lock (_sync) snapshot = queue?.Clone();
         _dispatcher.Post(() => QueuesChanged?.Invoke(this,
             new QueuesChangedEventArgs { ChangeType = changeType, Queue = snapshot }));
     }
