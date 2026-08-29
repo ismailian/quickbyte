@@ -13,6 +13,10 @@ namespace QuickByte.UI.Controls;
 /// double buffering, swallows WM_ERASEBKGND, and owner-draws the header,
 /// row backgrounds and hover state so both lists in the app look identical.
 ///
+/// It also drops the owner-draw cycle the Win32 control runs outside WM_PAINT
+/// when the pointer crosses a row it has invalidated, which is a documented bug
+/// and paints past the double buffer — see <see cref="OnDrawItem"/>.
+///
 /// Callers still handle <see cref="ListView.DrawSubItem"/> to paint cell
 /// content, and should use <see cref="SetSubItemText"/> rather than assigning
 /// <c>SubItems[i].Text</c> directly — assigning invalidates the row even when
@@ -23,15 +27,22 @@ namespace QuickByte.UI.Controls;
 /// </summary>
 public class BufferedListView : ListView
 {
+    private const int WmPaint = 0x000F;
     private const int WmEraseBkgnd = 0x0014;
     private const int WmHScroll = 0x0114;
     private const int WmVScroll = 0x0115;
+    private const int WmPrintClient = 0x0318;
 
     // Tracked as the item itself, not its index: rows are inserted and removed
     // as downloads change category (see MainForm.SetRowVisible), and a stored
     // index silently starts pointing at whichever row slid into that slot — so
     // the highlight jumps to a row the pointer isn't over.
     private ListViewItem? _hoveredItem;
+
+    // Non-zero while a paint message is being serviced. Owner-draw callbacks
+    // that arrive while it is zero are not part of a repaint at all — see
+    // OnDrawItem.
+    private int _paintDepth;
 
     public BufferedListView()
     {
@@ -133,6 +144,17 @@ public class BufferedListView : ListView
             m.Result = 1;
             return;
         }
+        // Everything the control draws happens inside one of these two, so they
+        // are what tells an owner-draw callback apart from the stray cycle
+        // OnDrawItem describes. Counted rather than flagged because a paint can
+        // nest: WM_PRINTCLIENT is delivered while WM_PRINT is being handled.
+        if (m.Msg is WmPaint or WmPrintClient)
+        {
+            _paintDepth++;
+            try { base.WndProc(ref m); } finally { _paintDepth--; }
+            return;
+        }
+
         base.WndProc(ref m);
 
         // Scrolling moves rows under a stationary pointer, so the hovered row
@@ -187,6 +209,25 @@ public class BufferedListView : ListView
         InvalidateRow(row);
     }
 
+    /// <summary>
+    /// Delivers a window message to this control's own <see cref="WndProc"/>.
+    /// Exists so the suppression in <see cref="OnDrawItem"/> can be tested: the
+    /// stray cycle is the Win32 control's reaction to a real WM_MOUSEMOVE, so
+    /// nothing short of the message reproduces it, and posting one from a test
+    /// would mean the repository's only P/Invoke.
+    /// </summary>
+    internal void DeliverMessageForTest(int message, IntPtr lParam)
+    {
+        var m = Message.Create(Handle, message, IntPtr.Zero, lParam);
+        WndProc(ref m);
+    }
+
+    /// <summary>
+    /// Paints the column headers. Deliberately *not* guarded the way
+    /// <see cref="OnDrawItem"/> is: the header is a child window of its own, so
+    /// its custom-draw notifications arrive while it — not this control — is
+    /// painting, and every one of them would look stray.
+    /// </summary>
     protected override void OnDrawColumnHeader(DrawListViewColumnHeaderEventArgs e)
     {
         using (var back = new SolidBrush(Theme.HeaderBack))
@@ -207,11 +248,56 @@ public class BufferedListView : ListView
         base.OnDrawColumnHeader(e);
     }
 
+    /// <summary>
+    /// Fills a row's background — but only when the control is actually painting.
+    ///
+    /// Moving the pointer onto a row that has been invalidated since it was last
+    /// entered makes the wrapped Win32 control run an owner-draw cycle of its
+    /// own, outside any paint message: it raises DrawItem for that row and then
+    /// exactly one DrawSubItem, for column 0. The other columns are not offered,
+    /// and with no WM_PAINT there is no double buffer either — so the fill below
+    /// would land straight on the screen and blank everything the row had drawn
+    /// to the right of the file name. Measured on this control, one firing
+    /// rewrote ~3,300 pixels of the row.
+    ///
+    /// What made that read as flicker rather than a one-frame flash is the
+    /// company it keeps. The rows it fires on are exactly the ones a download is
+    /// driving, since those are the rows the animation timer invalidates; and
+    /// the timer only invalidates the progress cell, so it never repaints the
+    /// columns the stray fill wiped. They stay wrong until something repaints
+    /// the whole row — usually the pointer moving off it. Dragging the pointer
+    /// down a list of active downloads therefore blanked each row as it was
+    /// reached and restored it as it was left. It costs nothing when the list is
+    /// idle: with no invalidation to arm it, the cycle does not fire at all.
+    ///
+    /// Microsoft documents the extra event on ListView.OwnerDraw and suggests
+    /// invalidating the row when it arrives, which repairs the damage rather
+    /// than avoiding it — the blank still reaches the screen first. Dropping the
+    /// cycle instead leaves the row exactly as the last real paint left it,
+    /// which is already correct: the control had nothing new to say. Every
+    /// genuine repaint — selection, hover, scroll, RedrawItems, DrawToBitmap —
+    /// arrives inside WM_PAINT or WM_PRINTCLIENT and is untouched.
+    /// </summary>
     protected override void OnDrawItem(DrawListViewItemEventArgs e)
     {
+        if (_paintDepth == 0) return;
+
         using (var back = new SolidBrush(RowBackColor(e.Item, e.ItemIndex, e.Item?.Selected ?? false)))
             e.Graphics.FillRectangle(back, e.Bounds);
 
         base.OnDrawItem(e);
+    }
+
+    /// <summary>
+    /// Raises <see cref="ListView.DrawSubItem"/>, except during the stray cycle
+    /// <see cref="OnDrawItem"/> describes. Suppressed here rather than in each
+    /// handler so the two lists in the app can't disagree about it, and because
+    /// drawing column 0's text a second time over itself is visible on its own.
+    /// </summary>
+    protected override void OnDrawSubItem(DrawListViewSubItemEventArgs e)
+    {
+        if (_paintDepth == 0) return;
+
+        base.OnDrawSubItem(e);
     }
 }
