@@ -1,4 +1,5 @@
 using System.Text.Json;
+using QuickByte.Core.Helpers;
 using QuickByte.Core.Interfaces;
 using QuickByte.Core.Models;
 
@@ -31,8 +32,7 @@ public sealed class QueueRepository : IQueueRepository
 
     public QueueRepository(string? appDataFolder = null)
     {
-        string folder = appDataFolder ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "QuickByte");
+        string folder = appDataFolder ?? AppPaths.Data;
         Directory.CreateDirectory(folder);
         _queuesFilePath = Path.Combine(folder, "queues.json");
     }

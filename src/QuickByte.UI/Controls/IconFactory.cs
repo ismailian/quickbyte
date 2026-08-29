@@ -241,6 +241,37 @@ public static class IconFactory
         g.DrawLine(pen, center, new PointF(center.X + clock.Width * 0.22f, center.Y));
     });
 
+    /// <summary>
+    /// Padlock for the sign-in dialog. A closed shackle rather than an open one:
+    /// the window it heads is the door still being refused, not one already
+    /// opened, and at 16 px the difference between the two is a couple of
+    /// pixels of arc — so the body carries the colour instead, amber for
+    /// "something is wanted from you" rather than red for "this failed".
+    /// </summary>
+    public static Bitmap SignIn(int size = 24) => Canvas(size, g =>
+    {
+        var body = new RectangleF(size * 0.20f, size * 0.44f, size * 0.60f, size * 0.42f);
+
+        using (var pen = new Pen(Theme.Warning, Math.Max(1.4f, size * 0.10f)) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+        {
+            // Drawn as an arc plus two stems so the shackle keeps its shape at
+            // 16 px, where a single stroked rounded path collapses into a blob.
+            var shackle = new RectangleF(size * 0.31f, size * 0.14f, size * 0.38f, size * 0.38f);
+            g.DrawArc(pen, shackle, 180, 180);
+            g.DrawLine(pen, shackle.Left, shackle.Y + shackle.Height / 2, shackle.Left, body.Top);
+            g.DrawLine(pen, shackle.Right, shackle.Y + shackle.Height / 2, shackle.Right, body.Top);
+        }
+
+        using (var fill = new LinearGradientBrush(body, Color.FromArgb(240, 190, 80), Theme.Warning, LinearGradientMode.Vertical))
+        using (var path = Theme.RoundedRect(body, size * 0.10f))
+            g.FillPath(fill, path);
+
+        using var keyhole = new SolidBrush(Color.White);
+        float hole = size * 0.13f;
+        g.FillEllipse(keyhole, body.X + (body.Width - hole) / 2, body.Y + body.Height * 0.22f, hole, hole);
+        g.FillRectangle(keyhole, body.X + (body.Width - hole * 0.42f) / 2, body.Y + body.Height * 0.42f, hole * 0.42f, body.Height * 0.30f);
+    });
+
     /// <summary>Power glyph for the tray menu's Exit entry — the one command that really closes the app.</summary>
     public static Bitmap Exit(int size = 24) => Canvas(size, g =>
     {

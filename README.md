@@ -123,12 +123,13 @@ to Core's events. This means the download engine could be reused headless
 
 1. **`IRemoteFileInfoProvider`** (`ProtocolFileInfoProvider`) — resolves file
    name, size, content type, and segment support, dispatching on the URL's
-   scheme. `RemoteFileInfoProvider` handles HTTP(S) with a HEAD request,
-   falling back to a ranged GET probe (`bytes=0-0`) for servers that reject
-   HEAD; `FtpFileInfoProvider` logs in and asks `SIZE`, `MDTM` and `FEAT`. A
-   `401` or an FTP `530` is reported as `AuthenticationRequiredException`
-   rather than a generic failure, which is what turns the Add Download
-   dialog's error line into a credentials prompt.
+   scheme. `RemoteFileInfoProvider` handles HTTP(S) with a HEAD request
+   followed by a ranged GET probe (`bytes=0-0`); `FtpFileInfoProvider` logs in
+   and asks `SIZE`, `MDTM` and `FEAT`. A `401` or an FTP `530` is reported as
+   `AuthenticationRequiredException` rather than a generic failure, which is
+   what brings up the sign-in dialog instead of an error the user can only
+   read. The probe is what settles segment support, and it is never skipped —
+   see **Segment support is proven, not read off a header** below.
 2. **`IDownloadManager`** (`DownloadManager`) — the facade/registry every
    window talks to. Owns every `IDownloadService`, persists the download
    list to JSON, throttles concurrent downloads with a `SemaphoreSlim`, and
@@ -417,6 +418,44 @@ the host the control connection already reached. Servers behind NAT routinely
 announce a private address there, and dialling it is the classic "passive mode
 hangs forever" failure.
 
+### Segment support is proven, not read off a header
+
+Whether a file is split across connections is decided by one question, and
+getting it wrong optimistically does not produce a slow download — it produces
+a failed one. Seven of eight connections are handed a response that starts at
+byte zero, refuse to write it at their own offset, and exhaust their retries.
+
+`Accept-Ranges: bytes` is not enough to answer that question, because the thing
+sending it is frequently not the origin. A CDN edge holding the whole file will
+answer a `Range` request with the entire body and a `200` while passing the
+origin's `Accept-Ranges` straight through. Nothing about that response is an
+error in HTTP. So:
+
+- **Only a `206` from the offset that was asked for** sets
+  `SupportsRangeRequests`. HEAD may name and size the file; it never gets to
+  settle this, however completely it answered.
+- **A `200` to the probe from a server that claimed `Accept-Ranges`** is a
+  contradiction rather than an answer, and it is the signature of a cache
+  rather than of a server that cannot seek. The probe is asked once more with
+  `Cache-Control: no-cache` (and its HTTP/1.0 twin `Pragma`), which is what
+  makes a shared cache go and ask the origin.
+- **If that comes back `206`**, the file is segmentable after all, and
+  `DownloadItem.BypassCache` records that it is only segmentable when asked
+  that way — so every connection, and every later resume, asks the same way. A
+  connection that went back to the cache would get the same whole-file answer
+  the probe just worked around.
+- **If it still comes back `200`**, the file runs on one connection. A server
+  that never claimed ranges is not asked twice; there is no contradiction to
+  investigate.
+
+protonvpn.com's download endpoint is the live example: it advertises
+`Accept-Ranges: bytes`, ignores `Range` on a cache hit, and honours it
+perfectly once the request reaches the origin. Which edge a given connection
+lands on varies, so the failure is intermittent — which is exactly the kind
+that gets reported as "it works in other download managers".
+
+## Credentials
+
 **HTTP Basic** is sent pre-emptively rather than after a `401`: every
 connection shares one static `HttpClient`, so `HttpClientHandler.Credentials`
 is not available, and presenting the header up front also saves a round trip
@@ -436,6 +475,15 @@ the one and only NuGet reference in the solution
 A `user:password@host` URL is split apart the moment it is entered
 (`UrlCredentials`), so the secret ends up in the field that encrypts itself
 rather than in `DownloadItem.Url`, which is persisted, displayed and logged.
+
+The Add Download window has **no login fields**. Almost no download needs one,
+and a checkbox and two boxes on every one of them made the ordinary case look
+like it had a decision in it. `CredentialsForm` opens instead when a server
+actually asks — on the `AuthenticationRequiredException` the probe raises —
+carrying the host and the server's own account of the refusal, and the fetch is
+retried with what it collects. There is no "remember me" on it: a download
+paused for three days has to present the same login when it resumes, so the
+credentials are kept either way, encrypted.
 
 ## Browser integration
 
@@ -481,14 +529,13 @@ directly to `DownloadSettings`:
 
 | Setting | Range / default |
 |---|---|
-| Default connections per download | 1–32, default 8 |
+| Default connections per download | 1, 2, 4, 8, 16, 24 or 32 — default 8 |
 | Max retries per connection | default 3 |
 | Retry base delay | default 1500 ms (exponential backoff) |
 | Max concurrent downloads | default 3 |
 | Global speed limit | default 0 (unlimited), in KB/s |
 | Progress sampling interval | default 100 ms (clamped to 50–2000) |
 | Default download folder | `~/Downloads/QuickByte` |
-| Temp folder (chunk files) | OS temp + `QuickByte` |
 | Open the details window automatically | on |
 | Show the download complete window | on |
 | Start QuickByte when Windows starts | off |
@@ -500,6 +547,19 @@ directly to `DownloadSettings`:
 A queue's own settings — downloads at once, queue speed limit, and its
 schedule — are per queue rather than global, and live in the Queues & Scheduler
 window (`queues.json`) instead of here.
+
+**The chunk folder is not a setting.** In-flight `.tmp` segments live in
+`%AppData%/QuickByte/temp`, beside `settings.json`, `downloads.json` and
+`queues.json` — derived by `SettingsService`, never persisted, and no longer
+offered in Options. It used to be under `%TEMP%`, which is the one directory on
+a Windows machine that gets emptied on purpose: by the user, by Disk Cleanup,
+and by every "PC cleaner" ever installed. Resume is driven entirely by chunk
+length on disk, so a sweep during a pause does not lose a cache, it loses the
+download.
+
+Where *finished* files land is unaffected and is still yours to choose — the
+**Folders** tab sets the default, and Add Download's **Save to** box overrides
+it for a single file.
 
 Two of these are honoured **live** rather than at the next download: the
 global speed limit, and browser integration (enabling it, or moving its port,
@@ -539,8 +599,16 @@ Every window is styled after classic IDM, on a single flat palette defined in
   finishes: final size, average speed, destination folder, and Open File /
   Open Folder actions. Opting out of it from the checkbox is persisted.
 - **Add New Download** pre-fills from the clipboard and resolves file
-  info (type, size, resumability) before you commit; **Options** groups
-  settings into Connection / Folders / Interface / Startup / Browser tabs.
+  info (type, size, resumability) before you commit. Its **Save to** box shows a
+  folder inside your profile as `~\Downloads\QuickByte` — the full path is wider
+  than the box, and the half that gets clipped is the half that says where the
+  file is going. A folder anywhere else is shown in full, because that is
+  somewhere you chose on purpose (`Core/Helpers/UserPath.cs`). **Options** groups
+  settings into Connection / Folders / Interface / Startup / Browser tabs, and
+  its *Default download folder* is abbreviated the same way.
+- **Sign In** — a small modal that appears only when a server answers a probe
+  with a `401` or an FTP `530`. It names the host, repeats what the server
+  said, and hands the login straight back to the fetch that was refused.
 
 Every secondary window — Add New Download, download details, download
 complete — is a window in its own right: unowned, with its own taskbar button,

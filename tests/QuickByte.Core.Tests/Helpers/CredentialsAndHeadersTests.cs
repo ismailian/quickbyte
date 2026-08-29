@@ -207,4 +207,72 @@ public sealed class HttpRequestDecoratorTests
 
         Assert.True(request.Headers.Contains("Cookie"));
     }
+
+    // ------------------------------------------------------ asking the origin --
+
+    [Fact]
+    public void Apply_asks_past_the_cache_in_both_spellings_when_told_to()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://example.com/f.bin");
+
+        HttpRequestDecorator.Apply(request, new RequestOptions { BypassCache = true });
+
+        Assert.True(request.Headers.CacheControl!.NoCache);
+
+        // Pragma is the HTTP/1.0 spelling and still the only one some
+        // intermediaries act on, so both go or the workaround is a coin toss.
+        Assert.Equal("no-cache", request.Headers.Pragma.Single().Name);
+    }
+
+    [Fact]
+    public void Apply_leaves_the_cache_alone_by_default()
+    {
+        // Asking every server to revalidate would throw away the edge caching
+        // that makes a CDN download fast in the first place.
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://example.com/f.bin");
+
+        HttpRequestDecorator.Apply(request, new RequestOptions());
+
+        Assert.Null(request.Headers.CacheControl);
+        Assert.Empty(request.Headers.Pragma);
+    }
+
+    [Fact]
+    public void A_captured_cache_header_does_not_get_to_argue_with_the_bypass()
+    {
+        // The extension replays the page's own request headers. One of them
+        // saying max-age=0 beside our no-cache is a header with two directives
+        // and no telling which an intermediary honours.
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://example.com/f.bin");
+
+        HttpRequestDecorator.Apply(request, new RequestOptions
+        {
+            BypassCache = true,
+            Headers = new Dictionary<string, string>
+            {
+                ["Cache-Control"] = "max-age=0",
+                ["Pragma"] = "akamai-x-cache-on",
+                ["Cookie"] = "session=abc"
+            }
+        });
+
+        Assert.Equal("no-cache", request.Headers.CacheControl!.ToString());
+        Assert.Equal("no-cache", request.Headers.Pragma.Single().Name);
+
+        // Everything else the browser sent still goes.
+        Assert.True(request.Headers.Contains("Cookie"));
+    }
+
+    [Fact]
+    public void A_captured_cache_header_is_still_sent_when_nothing_is_being_bypassed()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://example.com/f.bin");
+
+        HttpRequestDecorator.Apply(request, new RequestOptions
+        {
+            Headers = new Dictionary<string, string> { ["Cache-Control"] = "max-age=0" }
+        });
+
+        Assert.Equal("max-age=0", request.Headers.CacheControl!.ToString());
+    }
 }

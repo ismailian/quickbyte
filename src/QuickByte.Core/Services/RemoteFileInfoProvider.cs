@@ -9,19 +9,41 @@ using QuickByte.Core.Models;
 namespace QuickByte.Core.Services;
 
 /// <summary>
-/// Resolves remote file metadata over HTTP(S). Tries a HEAD request first
-/// (cheap); if the server doesn't answer HEAD usefully, falls back to a ranged
-/// GET probe (bytes=0-0) which also lets us positively confirm Range support
-/// via a 206 Partial Content response.
+/// Resolves remote file metadata over HTTP(S). A HEAD request first (cheap),
+/// then a ranged GET probe (<c>bytes=0-0</c>) which is the only thing that can
+/// answer the question the pool actually needs answered: not whether the server
+/// says it supports ranges, but whether asking for one gets a range back.
 ///
 /// A 401 is reported as <see cref="AuthenticationRequiredException"/> rather
 /// than a generic failure: it is the one error the user can actually do
 /// something about, and the Add Download dialog turns it into a credentials
 /// prompt instead of a dead end.
 /// </summary>
+/// <remarks>
+/// <para><b>Why the probe is not optional.</b> HEAD used to be allowed to
+/// settle range support on its own when it also supplied a size and a name, on
+/// the strength of <c>Accept-Ranges: bytes</c>. That header is a claim, and the
+/// thing making it is frequently a CDN edge rather than the origin — one which,
+/// holding the whole file in cache, answers a <c>Range</c> request with the
+/// whole body and a <c>200</c> while passing the origin's <c>Accept-Ranges</c>
+/// through unchanged. Nothing about that response is an error in HTTP. It just
+/// means the file gets split eight ways and seven of those connections receive
+/// bytes belonging at offset zero — a download that fails outright, and does so
+/// only on the servers that look the most cooperative.</para>
+///
+/// <para><b>Why a 200 to the probe is not the end of it.</b> The same
+/// contradiction — claims ranges, ignores one — is the signature of a cache in
+/// the middle rather than of a server that cannot seek. So the probe is asked a
+/// second time with <c>Cache-Control: no-cache</c>, which is what makes a shared
+/// cache go and ask the origin. When that comes back <c>206</c>, ranges work,
+/// and <see cref="RemoteFileInfo.BypassCache"/> records that they only work when
+/// asked for that way, so every connection asks the same way.
+/// (protonvpn.com's download endpoint behaves exactly like this; it is the
+/// reason any of this is here.)</para>
+/// </remarks>
 public sealed class RemoteFileInfoProvider : IRemoteFileInfoProvider
 {
-    private static readonly HttpClient Client = new(new SocketsHttpHandler
+    private static readonly HttpClient SharedClient = new(new SocketsHttpHandler
     {
         PooledConnectionLifetime = TimeSpan.FromMinutes(10),
 
@@ -31,16 +53,41 @@ public sealed class RemoteFileInfoProvider : IRemoteFileInfoProvider
     })
     { Timeout = TimeSpan.FromSeconds(30) };
 
+    private readonly HttpClient _client;
+
+    public RemoteFileInfoProvider() : this(SharedClient) { }
+
+    /// <summary>
+    /// The seam the tests need, and the only one. Everything this class exists
+    /// to get right is about servers that answer *incorrectly* — a range request
+    /// met with the whole file, an Accept-Ranges header the response contradicts
+    /// — and there is no way to ask a real server to behave like that on demand.
+    /// Internal rather than public: production has exactly one client, and it is
+    /// shared on purpose.
+    /// </summary>
+    internal RemoteFileInfoProvider(HttpClient client) => _client = client;
+
     public async Task<RemoteFileInfo> GetFileInfoAsync(string url, RequestOptions? options = null, CancellationToken cancellationToken = default)
     {
-        var info = new RemoteFileInfo { FinalUrl = url };
+        var info = new RemoteFileInfo
+        {
+            FinalUrl = url,
+
+            // Carried in, not reset: a download that already learned it has to
+            // ask past a cache probes that way from the start, and the probe
+            // below must not then read its own success as "no bypass needed"
+            // and strip the headers off every connection.
+            BypassCache = options?.BypassCache == true
+        };
+
         string? serverFileName = null;
+        bool headAnsweredEverything = false;
 
         try
         {
             using var headRequest = new HttpRequestMessage(HttpMethod.Head, url);
             HttpRequestDecorator.Apply(headRequest, options);
-            using var headResponse = await Client.SendAsync(headRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            using var headResponse = await _client.SendAsync(headRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
                 .ConfigureAwait(false);
 
             ThrowIfChallenged(headResponse, info, options);
@@ -49,12 +96,9 @@ public sealed class RemoteFileInfoProvider : IRemoteFileInfoProvider
             {
                 serverFileName = Absorb(info, headResponse);
 
-                // The probe is skipped only when HEAD answered *both* questions.
-                // Plenty of servers set Content-Disposition in their GET handler
-                // and not on HEAD, and stopping here on the strength of a
-                // Content-Length alone is what leaves those files named after
-                // the last segment of their URL.
-                if (info.HasKnownSize && serverFileName is not null) return Finish(info, serverFileName);
+                // Enough to name and size the file, but never enough to decide
+                // how many connections fetch it. That is what the probe is for.
+                headAnsweredEverything = info.HasKnownSize && serverFileName is not null;
             }
         }
         catch (AuthenticationRequiredException)
@@ -66,24 +110,85 @@ public sealed class RemoteFileInfoProvider : IRemoteFileInfoProvider
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // Some servers reject HEAD entirely — fall through to a ranged GET probe.
+            // Some servers reject HEAD entirely — fall through to the GET probe.
         }
 
-        using var getRequest = new HttpRequestMessage(HttpMethod.Get, url);
-        getRequest.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, 0);
-        HttpRequestDecorator.Apply(getRequest, options);
-        using var getResponse = await Client.SendAsync(getRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-            .ConfigureAwait(false);
-
-        ThrowIfChallenged(getResponse, info, options);
-        getResponse.EnsureSuccessStatusCode();
-
-        if (getResponse.StatusCode == HttpStatusCode.PartialContent)
-            info.SupportsRangeRequests = true;
-
-        serverFileName ??= Absorb(info, getResponse, fromRangedProbe: true);
+        try
+        {
+            // Not "serverFileName ??= await ..." — that short-circuits, and the
+            // one case it would skip the probe in is a HEAD that answered
+            // everything, which is exactly the case this exists to stop
+            // trusting.
+            string? probedName = await ProbeRangeSupportAsync(url, info, options, cancellationToken).ConfigureAwait(false);
+            serverFileName ??= probedName;
+        }
+        catch (Exception ex) when (headAnsweredEverything
+                                   && ex is not OperationCanceledException
+                                   && ex is not AuthenticationRequiredException)
+        {
+            // HEAD already answered the questions the dialog asks. A probe that
+            // could not run leaves range support unproven — one connection, and
+            // a download that works — rather than throwing away a good answer.
+            info.SupportsRangeRequests = false;
+        }
 
         return Finish(info, serverFileName);
+    }
+
+    /// <summary>
+    /// Asks for one byte and reports what came back. Sets
+    /// <see cref="RemoteFileInfo.SupportsRangeRequests"/> only on a genuine
+    /// <c>206</c>, and escalates past an intermediary cache once when the
+    /// response contradicts the server's own <c>Accept-Ranges</c> claim.
+    /// </summary>
+    /// <returns>The file name the server named on the probe, or null.</returns>
+    private async Task<string?> ProbeRangeSupportAsync(
+        string url, RemoteFileInfo info, RequestOptions? options, CancellationToken cancellationToken)
+    {
+        using var response = await SendRangedProbeAsync(url, options, cancellationToken).ConfigureAwait(false);
+
+        ThrowIfChallenged(response, info, options);
+        response.EnsureSuccessStatusCode();
+
+        string? fileName = Absorb(info, response, fromRangedProbe: true);
+
+        if (response.StatusCode == HttpStatusCode.PartialContent)
+        {
+            info.SupportsRangeRequests = true;
+            return fileName;
+        }
+
+        // A whole-file answer to a one-byte request. If the server never claimed
+        // to do ranges, that is simply the truth and costs one connection. If it
+        // did claim it, something between here and the origin is answering from
+        // a copy it cannot slice — and that is worth one more request to check.
+        // Not re-checked when the caller already asked past the cache: the same
+        // request cannot produce a different answer, and the probe would loop.
+        if (!info.ServerClaimsRangeSupport || info.BypassCache) return fileName;
+
+        using var revalidated = await SendRangedProbeAsync(
+            url, (options ?? RequestOptions.None).WithCacheBypass(), cancellationToken).ConfigureAwait(false);
+
+        if (revalidated.StatusCode != HttpStatusCode.PartialContent) return fileName;
+
+        info.SupportsRangeRequests = true;
+        info.BypassCache = true;
+        return Absorb(info, revalidated, fromRangedProbe: true) ?? fileName;
+    }
+
+    private async Task<HttpResponseMessage> SendRangedProbeAsync(
+        string url, RequestOptions? options, CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, 0);
+        HttpRequestDecorator.Apply(request, options);
+
+        // ResponseHeadersRead: a server that ignores the range is about to start
+        // sending the entire file, and the status line is all this needs.
+        // Disposing the response is what stops it.
+        return await _client
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private static void ThrowIfChallenged(HttpResponseMessage response, RemoteFileInfo info, RequestOptions? options)
@@ -113,8 +218,10 @@ public sealed class RemoteFileInfoProvider : IRemoteFileInfoProvider
         if (response.RequestMessage?.RequestUri is not null)
             info.FinalUrl = response.RequestMessage.RequestUri.ToString();
 
+        // Recorded as the claim it is. Only a 206 sets SupportsRangeRequests —
+        // see the remarks on this class for what this header is worth on its own.
         if (response.Headers.AcceptRanges.Contains("bytes"))
-            info.SupportsRangeRequests = true;
+            info.ServerClaimsRangeSupport = true;
 
         // A ranged probe's own Content-Length is 1 byte, which must never become
         // the file's size. Only Content-Range carries the total, and a probe the

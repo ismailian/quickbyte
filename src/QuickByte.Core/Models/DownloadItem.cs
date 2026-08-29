@@ -81,11 +81,24 @@ public sealed class DownloadItem
     public string FullPath => Path.Combine(SaveFolder, FileName);
     public string TempFolderPath { get; set; } = string.Empty;
 
-    /// <summary>Bundles the two fields above into the shape the engine takes.</summary>
+    /// <summary>
+    /// This URL only serves byte ranges when the request asks the origin rather
+    /// than whatever cache is in front of it — see
+    /// <see cref="RequestOptions.BypassCache"/>.
+    ///
+    /// Persisted for the same reason <see cref="Credentials"/> is: it is a fact
+    /// about the server that the probe paid two requests to learn, and a resume
+    /// three days later has to ask the same way or it gets the whole-file answer
+    /// on every segment but the first.
+    /// </summary>
+    public bool BypassCache { get; set; }
+
+    /// <summary>Bundles the fields above into the shape the engine takes.</summary>
     public RequestOptions ToRequestOptions() => new()
     {
         Credentials = Credentials,
-        Headers = Headers.Count > 0 ? Headers : null
+        Headers = Headers.Count > 0 ? Headers : null,
+        BypassCache = BypassCache
     };
 
     public double ProgressPercentage =>

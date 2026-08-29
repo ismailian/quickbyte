@@ -236,8 +236,7 @@ public sealed class SettingsServiceTests
             DefaultConnectionsCount = 16,
             GlobalSpeedLimitBytesPerSecond = 250_000,
             StartMinimized = true,
-            DefaultDownloadFolder = folder.Path,
-            TempFolder = folder.Path
+            DefaultDownloadFolder = folder.Path
         });
 
         var reopened = new SettingsService(folder.Path);
@@ -246,6 +245,7 @@ public sealed class SettingsServiceTests
         Assert.Equal(16, reopened.Current.DefaultConnectionsCount);
         Assert.Equal(250_000, reopened.Current.GlobalSpeedLimitBytesPerSecond);
         Assert.True(reopened.Current.StartMinimized);
+        Assert.Equal(folder.Path, reopened.Current.DefaultDownloadFolder);
     }
 
     [Fact]
@@ -275,8 +275,7 @@ public sealed class SettingsServiceTests
         var saved = new DownloadSettings
         {
             GlobalSpeedLimitBytesPerSecond = 999,
-            DefaultDownloadFolder = folder.Path,
-            TempFolder = folder.Path
+            DefaultDownloadFolder = folder.Path
         };
         service.Save(saved);
 
@@ -288,14 +287,48 @@ public sealed class SettingsServiceTests
     public void Load_creates_the_folders_a_download_is_about_to_need()
     {
         using var folder = new TempFolder();
-        string downloads = Path.Combine(folder.Path, "downloads");
-        string temp = Path.Combine(folder.Path, "temp");
+        string downloads = Path.Combine(folder.Path, "finished");
 
         var service = new SettingsService(folder.Path);
-        service.Save(new DownloadSettings { DefaultDownloadFolder = downloads, TempFolder = temp });
+        service.Save(new DownloadSettings { DefaultDownloadFolder = downloads });
         service.Load();
 
         Assert.True(Directory.Exists(downloads));
-        Assert.True(Directory.Exists(temp));
+        Assert.True(Directory.Exists(Path.Combine(folder.Path, "temp")));
+    }
+
+    [Fact]
+    public void The_chunk_folder_follows_the_data_folder_and_the_download_folder_does_not()
+    {
+        // The chunk folder is derived, not configured: Options has no field for
+        // it, and a settings.json written by an older build still names %TEMP%,
+        // where every disk cleaner on the machine sweeps it. Stamping it here is
+        // what carries an existing install over. The download folder in the same
+        // file is a real setting and has to come back untouched.
+        using var folder = new TempFolder();
+        File.WriteAllText(Path.Combine(folder.Path, "settings.json"),
+            """{"DefaultDownloadFolder":"D:\\keep-me","TempFolder":"C:\\Windows\\Temp\\QuickByte"}""");
+
+        var service = new SettingsService(folder.Path);
+        service.Load();
+
+        Assert.Equal(Path.Combine(folder.Path, "temp"), service.Current.TempFolder);
+        Assert.Equal(@"D:\keep-me", service.Current.DefaultDownloadFolder);
+    }
+
+    [Fact]
+    public void Save_stamps_the_chunk_folder_onto_the_fresh_settings_the_options_dialog_builds()
+    {
+        // SettingsForm builds a *new* DownloadSettings on every save and no
+        // longer carries TempFolder forward — so the service has to, or the
+        // first Save after an Options visit points the chunks at %AppData%
+        // proper rather than at wherever this install keeps its state.
+        using var folder = new TempFolder();
+        var service = new SettingsService(folder.Path);
+        service.Load();
+
+        service.Save(new DownloadSettings { DefaultConnectionsCount = 16 });
+
+        Assert.Equal(Path.Combine(folder.Path, "temp"), service.Current.TempFolder);
     }
 }

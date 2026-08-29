@@ -30,6 +30,16 @@ internal static class HttpRequestDecorator
                 "Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes(pair)));
         }
 
+        if (options.BypassCache)
+        {
+            // Both forms, because the intermediary that has to hear it is not
+            // necessarily a modern one: Pragma is the HTTP/1.0 spelling and is
+            // still the only thing some proxies act on. See
+            // RequestOptions.BypassCache for what this is worked around.
+            request.Headers.CacheControl = new CacheControlHeaderValue { NoCache = true };
+            request.Headers.Pragma.Add(new NameValueHeaderValue("no-cache"));
+        }
+
         if (options.Headers is null) return;
 
         foreach (var (name, value) in options.Headers)
@@ -41,6 +51,14 @@ internal static class HttpRequestDecorator
             // stale captured Range would silently truncate the segment.
             if (name.Equals("Range", StringComparison.OrdinalIgnoreCase)) continue;
             if (options.HasCredentials && name.Equals("Authorization", StringComparison.OrdinalIgnoreCase)) continue;
+
+            // Same rule for the pair just written above: a captured
+            // "Cache-Control: max-age=0" appended beside our own no-cache is a
+            // header with two directives, and which one an intermediary honours
+            // is its business, not ours.
+            if (options.BypassCache
+                && (name.Equals("Cache-Control", StringComparison.OrdinalIgnoreCase)
+                    || name.Equals("Pragma", StringComparison.OrdinalIgnoreCase))) continue;
 
             request.Headers.TryAddWithoutValidation(name, value);
         }

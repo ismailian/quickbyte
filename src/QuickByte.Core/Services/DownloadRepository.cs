@@ -1,4 +1,5 @@
 using System.Text.Json;
+using QuickByte.Core.Helpers;
 using QuickByte.Core.Interfaces;
 using QuickByte.Core.Models;
 
@@ -16,8 +17,7 @@ public sealed class DownloadRepository : IDownloadRepository
 
     public DownloadRepository(string? appDataFolder = null)
     {
-        string folder = appDataFolder ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "QuickByte");
+        string folder = appDataFolder ?? AppPaths.Data;
         Directory.CreateDirectory(folder);
         _dbFilePath = Path.Combine(folder, "downloads.json");
     }

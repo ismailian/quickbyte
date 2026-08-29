@@ -174,10 +174,42 @@ public sealed class DownloadItemTests
     }
 
     [Fact]
+    public void ToRequestOptions_carries_what_the_probe_learned_about_the_cache()
+    {
+        // The flag is a fact about the server that the probe paid an extra
+        // request to learn. A connection that does not carry it goes back to
+        // the cache and gets the whole-file answer the probe worked around.
+        var options = new DownloadItem { BypassCache = true }.ToRequestOptions();
+
+        Assert.True(options.BypassCache);
+        Assert.False(new DownloadItem().ToRequestOptions().BypassCache);
+    }
+
+    [Fact]
     public void RequestOptions_None_is_anonymous_and_header_free()
     {
         Assert.False(RequestOptions.None.HasCredentials);
         Assert.False(RequestOptions.None.HasHeaders);
+        Assert.False(RequestOptions.None.BypassCache);
+    }
+
+    [Fact]
+    public void WithCacheBypass_keeps_the_login_and_the_captured_headers()
+    {
+        // The escalated probe is the same request asked a different way. Losing
+        // the credentials on the way would turn a 206 into a 401.
+        var original = new RequestOptions
+        {
+            Credentials = new DownloadCredentials { UserName = "alice", Password = "hunter2" },
+            Headers = new Dictionary<string, string> { ["Cookie"] = "session=abc" }
+        };
+
+        var bypassing = original.WithCacheBypass();
+
+        Assert.True(bypassing.BypassCache);
+        Assert.Equal("alice", bypassing.Credentials!.UserName);
+        Assert.Equal("session=abc", bypassing.Headers!["Cookie"]);
+        Assert.False(original.BypassCache);
     }
 }
 
@@ -325,6 +357,69 @@ public sealed class DownloadSettingsTests
         // every install's extension.
         Assert.Empty(new DownloadSettings().BrowserIntegrationToken);
     }
+
+    [Fact]
+    public void The_chunk_folder_lives_beside_the_rest_of_the_app_state()
+    {
+        // It used to be %TEMP%\QuickByte, and %TEMP% is emptied on a schedule by
+        // the user, by Disk Cleanup and by every third-party cleaner — while
+        // resume is driven entirely by chunk length on disk, so a sweep during a
+        // pause does not lose a cache, it loses the download.
+        Assert.Equal(Path.Combine(AppPaths.Data, "temp"), new DownloadSettings().TempFolder);
+    }
+
+    [Fact]
+    public void Where_finished_files_land_is_still_the_users_own_folder()
+    {
+        // Only the chunk folder moved. Filing people's files inside the app's
+        // own AppData directory would be answering a question nobody asked.
+        Assert.Equal(
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "QuickByte"),
+            new DownloadSettings().DefaultDownloadFolder);
+    }
+
+    [Fact]
+    public void The_chunk_folder_is_not_persisted_so_an_existing_install_is_carried_over()
+    {
+        // Options has no field for it any more. Honouring a value written by an
+        // older build would strand exactly the people who already have the
+        // %TEMP% problem, with nothing left to fix it in. The download folder
+        // beside it is a real setting, and has to survive untouched.
+        string json = JsonSerializer.Serialize(new DownloadSettings());
+        Assert.DoesNotContain("TempFolder", json);
+        Assert.Contains("DefaultDownloadFolder", json);
+
+        var loaded = JsonSerializer.Deserialize<DownloadSettings>(
+            """{"DefaultDownloadFolder":"D:\\keep-me","TempFolder":"C:\\Windows\\Temp\\QuickByte"}""")!;
+
+        Assert.Equal(@"D:\keep-me", loaded.DefaultDownloadFolder);
+        Assert.Equal(new DownloadSettings().TempFolder, loaded.TempFolder);
+    }
+
+    [Fact]
+    public void The_connection_choices_are_the_ones_the_drop_downs_offer()
+    {
+        Assert.Equal(new[] { 1, 2, 4, 8, 16, 24, 32 }, DownloadSettings.ConnectionChoices);
+
+        // The default has to be one of them, or Options opens on a value it
+        // cannot select and reads back as the first entry.
+        Assert.Contains(DownloadSettings.DefaultConnections, DownloadSettings.ConnectionChoices);
+        Assert.Equal(DownloadSettings.MinConnections, DownloadSettings.ConnectionChoices[0]);
+        Assert.Equal(DownloadSettings.MaxConnections, DownloadSettings.ConnectionChoices[^1]);
+    }
+
+    [Theory]
+    [InlineData(8, 8)]
+    [InlineData(1, 1)]
+    [InlineData(32, 32)]
+    [InlineData(5, 4)]
+    [InlineData(3, 2)]
+    [InlineData(31, 24)]
+    [InlineData(0, 1)]
+    [InlineData(-4, 1)]
+    [InlineData(64, 32)]
+    public void NearestConnectionChoice_snaps_down_never_up(int requested, int expected) =>
+        Assert.Equal(expected, DownloadSettings.NearestConnectionChoice(requested));
 }
 
 public sealed class CapturedDownloadTests

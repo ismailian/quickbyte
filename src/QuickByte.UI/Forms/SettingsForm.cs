@@ -9,13 +9,21 @@ namespace QuickByte.UI.Forms;
 
 /// <summary>
 /// Exposes every configurable option, grouped into tabs: connection defaults
-/// and retry policy, folders, and window behaviour. Saving pushes a new
-/// <see cref="DownloadSettings"/> through <see cref="ISettingsService"/>.
+/// and retry policy, window behaviour, startup, and the browser bridge. Saving
+/// pushes a new <see cref="DownloadSettings"/> through
+/// <see cref="ISettingsService"/>.
 ///
 /// Note that <see cref="OnSaveClicked"/> builds a <em>fresh</em>
 /// <see cref="DownloadSettings"/> — any field not copied here silently reverts
 /// to its default, so a new setting must be added in three places: the model,
 /// a control below, and the object built in <see cref="OnSaveClicked"/>.
+///
+/// The Folders tab is down to one row. Where finished files go is still the
+/// user's choice; where the in-flight chunk files go is not, and no longer has
+/// a field — <see cref="Core.Services.SettingsService"/> derives it from the
+/// folder settings.json itself lives in. See <see cref="Core.Helpers.AppPaths"/>
+/// for why: the old default put those chunks under %TEMP%, and resume is driven
+/// entirely by chunk length on disk.
 /// </summary>
 public sealed class SettingsForm : Form
 {
@@ -29,14 +37,13 @@ public sealed class SettingsForm : Form
     /// </summary>
     private readonly ToolTip _tips = new();
 
-    private NumericUpDown _defaultConnectionsUpDown = null!;
+    private ConnectionCountBox _defaultConnectionsBox = null!;
     private NumericUpDown _maxRetriesUpDown = null!;
     private NumericUpDown _retryDelayUpDown = null!;
     private NumericUpDown _maxConcurrentUpDown = null!;
     private NumericUpDown _globalSpeedLimitUpDown = null!;
     private NumericUpDown _progressIntervalUpDown = null!;
     private TextBox _downloadFolderTextBox = null!;
-    private TextBox _tempFolderTextBox = null!;
     private CheckBox _autoOpenDetailsCheckBox = null!;
     private CheckBox _showCompletionCheckBox = null!;
     private CheckBox _startWithWindowsCheckBox = null!;
@@ -87,10 +94,9 @@ public sealed class SettingsForm : Form
         var layout = NewGrid(page, rows: 5);
         int row = 0;
 
-        _defaultConnectionsUpDown = AddNumericRow(layout, row++,
+        _defaultConnectionsBox = AddConnectionsRow(layout, row++,
             "Default connections",
-            $"Segments used for each new download ({DownloadSettings.MinConnections}–{DownloadSettings.MaxConnections}).",
-            DownloadSettings.MinConnections, DownloadSettings.MaxConnections);
+            "Segments for each new download; Add Download can override.");
 
         _maxConcurrentUpDown = AddNumericRow(layout, row++,
             "Max concurrent downloads",
@@ -114,14 +120,20 @@ public sealed class SettingsForm : Form
 
     }
 
+    /// <summary>
+    /// One row, and deliberately only one. The chunk folder used to sit under it
+    /// and does not any more: it is derived beside settings.json, because
+    /// pointing it at %TEMP% — which was its own default — is how a paused
+    /// download loses its chunks to a disk cleaner.
+    /// </summary>
     private void BuildFoldersTab(Panel page)
     {
         var layout = NewGrid(page, rows: 2);
-        int row = 0;
 
-        _downloadFolderTextBox = AddFolderRow(layout, row++, "Default download folder", "Where finished files are saved.");
-        _tempFolderTextBox = AddFolderRow(layout, row++, "Temp folder", "Holds part files while a download is in flight.");
-
+        _downloadFolderTextBox = AddFolderRow(layout, 0, "Default download folder", "Where finished files are saved.");
+        AddNoteRow(layout, 1,
+            "Add Download can send a single file elsewhere. Chunk files live with QuickByte's own "
+            + "data, where a cleanup tool cannot empty them mid-download.");
     }
 
     private void BuildInterfaceTab(Panel page)
@@ -338,6 +350,26 @@ public sealed class SettingsForm : Form
         return textBox;
     }
 
+    /// <summary>
+    /// The same shape as <see cref="AddNumericRow"/>, with the spinner swapped
+    /// for the shared connection-count list — see <see cref="ConnectionCountBox"/>.
+    /// </summary>
+    private static ConnectionCountBox AddConnectionsRow(TableLayoutPanel layout, int row, string caption, string hint)
+    {
+        var captionBlock = CaptionBlock(caption, hint);
+        layout.Controls.Add(captionBlock, 0, row);
+        layout.SetColumnSpan(captionBlock, 2);
+
+        var box = new ConnectionCountBox
+        {
+            Width = 88,
+            Anchor = AnchorStyles.Right,
+            Margin = new Padding(0, 13, 0, 0)
+        };
+        layout.Controls.Add(box, 2, row);
+        return box;
+    }
+
     private static CheckBox AddCheckRow(TableLayoutPanel layout, int row, string caption)
     {
         var box = new CheckBox
@@ -423,14 +455,16 @@ public sealed class SettingsForm : Form
     private void LoadValues()
     {
         var s = _settingsService.Current;
-        _defaultConnectionsUpDown.Value = Math.Clamp(s.DefaultConnectionsCount, DownloadSettings.MinConnections, DownloadSettings.MaxConnections);
+        _defaultConnectionsBox.Connections = s.DefaultConnectionsCount;
         _maxRetriesUpDown.Value = Math.Clamp(s.MaxRetries, 0, 20);
         _retryDelayUpDown.Value = Math.Clamp(s.RetryDelayMilliseconds, 100, 60000);
         _maxConcurrentUpDown.Value = Math.Clamp(s.MaxConcurrentDownloads, 1, 20);
         _globalSpeedLimitUpDown.Value = Math.Clamp(s.GlobalSpeedLimitBytesPerSecond / ByteFormatter.BytesPerKilobyte, 0, 1_000_000);
         _progressIntervalUpDown.Value = Math.Clamp(s.ProgressUpdateIntervalMilliseconds, 50, 2000);
-        _downloadFolderTextBox.Text = s.DefaultDownloadFolder;
-        _tempFolderTextBox.Text = s.TempFolder;
+        // Abbreviated the same way Add Download's "Save to" is, and read back
+        // through UserPath.Expand in OnSaveClicked — see UserPath for why the
+        // two halves have to stay together.
+        _downloadFolderTextBox.Text = UserPath.Shorten(s.DefaultDownloadFolder);
         _autoOpenDetailsCheckBox.Checked = s.AutoOpenDetailsWindow;
         _showCompletionCheckBox.Checked = s.ShowCompletionWindow;
 
@@ -455,9 +489,12 @@ public sealed class SettingsForm : Form
 
     private void Browse(TextBox target)
     {
-        using var dialog = new FolderBrowserDialog { SelectedPath = target.Text };
+        // Expanded on the way in — a FolderBrowserDialog handed "~\Downloads"
+        // opens on nothing — and shortened again on the way back out, so
+        // browsing to a folder in the profile does not undo the abbreviation.
+        using var dialog = new FolderBrowserDialog { SelectedPath = UserPath.Expand(target.Text) };
         if (dialog.ShowDialog(this) == DialogResult.OK)
-            target.Text = dialog.SelectedPath;
+            target.Text = UserPath.Shorten(dialog.SelectedPath);
     }
 
     private void InitializeComponent()
@@ -478,14 +515,16 @@ public sealed class SettingsForm : Form
     {
         var updated = new DownloadSettings
         {
-            DefaultConnectionsCount = (int)_defaultConnectionsUpDown.Value,
+            DefaultConnectionsCount = _defaultConnectionsBox.Connections,
             MaxRetries = (int)_maxRetriesUpDown.Value,
             RetryDelayMilliseconds = (int)_retryDelayUpDown.Value,
             MaxConcurrentDownloads = (int)_maxConcurrentUpDown.Value,
             GlobalSpeedLimitBytesPerSecond = (long)_globalSpeedLimitUpDown.Value * ByteFormatter.BytesPerKilobyte,
             ProgressUpdateIntervalMilliseconds = (int)_progressIntervalUpDown.Value,
-            DefaultDownloadFolder = _downloadFolderTextBox.Text.Trim(),
-            TempFolder = _tempFolderTextBox.Text.Trim(),
+            // Expanded, never the displayed text: this value is persisted and is
+            // what Directory.CreateDirectory below is handed, and a literal "~"
+            // reaching that makes a folder called "~" beside the executable.
+            DefaultDownloadFolder = UserPath.Expand(_downloadFolderTextBox.Text),
             AutoOpenDetailsWindow = _autoOpenDetailsCheckBox.Checked,
             ShowCompletionWindow = _showCompletionCheckBox.Checked,
             StartWithWindows = _startWithWindowsCheckBox.Checked,
@@ -503,7 +542,6 @@ public sealed class SettingsForm : Form
         try
         {
             Directory.CreateDirectory(updated.DefaultDownloadFolder);
-            Directory.CreateDirectory(updated.TempFolder);
         }
         catch (Exception ex)
         {
@@ -511,6 +549,10 @@ public sealed class SettingsForm : Form
             return;
         }
 
+        // The chunk folder is not checked here: SettingsService.Save stamps and
+        // creates it, and this dialog no longer names it, so there is nothing
+        // the user could have got wrong about it.
+        //
         // Saved before the registry write, and the write is not allowed to fail
         // the save: everything else on this page is still valid, and a startup
         // entry Windows refused is worth a sentence, not a lost Options session.

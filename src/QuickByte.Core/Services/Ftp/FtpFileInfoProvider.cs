@@ -45,6 +45,13 @@ public sealed class FtpFileInfoProvider : IRemoteFileInfoProvider
         info.SupportsRangeRequests = info.HasKnownSize
             && await channel.SupportsRestartAsync(cancellationToken).ConfigureAwait(false);
 
+        // FEAT is the server's own word for it, exactly like Accept-Ranges — and
+        // unlike HTTP there is no cheap way to make it prove the claim, so the
+        // two flags say the same thing here. FtpDownloadConnection is the safety
+        // net instead: a refused REST discards the partial chunk and refetches
+        // from zero rather than writing bytes at the wrong offset.
+        info.ServerClaimsRangeSupport = info.SupportsRangeRequests;
+
         return info;
     }
 }

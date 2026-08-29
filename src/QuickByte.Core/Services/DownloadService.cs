@@ -76,6 +76,14 @@ public sealed class DownloadService : IDownloadService
             Item.TotalBytes = _lastFileInfo.HasKnownSize ? _lastFileInfo.ContentLength : Item.TotalBytes;
             Item.SupportsResume = _lastFileInfo.SupportsRangeRequests;
             Item.ContentType = _lastFileInfo.ContentType;
+
+            // Taken from the fresh probe, before the pool builds its
+            // connections: a Retry re-resolves the file, and if a cache in front
+            // of the server is what makes ranges work, the connections have to
+            // learn that from this run rather than from whatever the item was
+            // added with. The probe seeds the flag from the options it was
+            // handed, so an item that already knew keeps knowing.
+            Item.BypassCache = _lastFileInfo.BypassCache;
             if (string.IsNullOrWhiteSpace(Item.TempFolderPath))
                 Item.TempFolderPath = Path.Combine(_settingsService.Current.TempFolder, Item.Id.ToString("N"));
 
