@@ -778,6 +778,8 @@ public sealed class DownloadServiceTests
 
         public void DiscardChunks(string tempFolder) => Discards++;
 
+        public void ForgetLayout(string tempFolder) { }
+
         public IReadOnlyList<ConnectionInfo> Snapshot { get; } = Array.Empty<ConnectionInfo>();
 
         public async Task<bool> RunAsync(

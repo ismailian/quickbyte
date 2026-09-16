@@ -316,7 +316,9 @@ public sealed class DownloadService : IDownloadService
             .ConfigureAwait(false);
 
         // The merge deletes each chunk as it lands; this collects any a scanner
-        // held open at the time, and then the folder itself.
+        // held open at the time, the pool's record of the layout, and then the
+        // folder itself.
+        _poolManager.ForgetLayout(Item.TempFolderPath);
         _fileMerger.CleanupChunks(chunkPaths, Item.TempFolderPath);
 
         // Before Completed is announced: the completion window offers to open

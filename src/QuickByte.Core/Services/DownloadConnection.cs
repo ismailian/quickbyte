@@ -17,7 +17,7 @@ namespace QuickByte.Core.Services;
 /// state via properties, which the pool manager polls on a timer to build
 /// aggregated progress (no per-byte event chatter reaches the UI).
 /// </summary>
-public sealed class DownloadConnection : IDownloadConnection
+public sealed class DownloadConnection : IResizableConnection
 {
     private readonly HttpClient _httpClient;
     private readonly string _url;
@@ -32,9 +32,12 @@ public sealed class DownloadConnection : IDownloadConnection
     private volatile ConnectionStatus _status = ConnectionStatus.Idle;
     private volatile string? _lastError;
 
+    /// <summary>The range, which a split may shorten while this runs — see <see cref="SegmentRange"/>.</summary>
+    private readonly SegmentRange _range;
+
     public int ConnectionId { get; }
-    public long RangeStart { get; }
-    public long RangeEnd { get; }
+    public long RangeStart => _range.Start;
+    public long RangeEnd => _range.End;
     public string ChunkFilePath { get; }
 
     /// <summary>Bytes already present in the chunk file from a previous run (resume support).</summary>
@@ -61,8 +64,7 @@ public sealed class DownloadConnection : IDownloadConnection
         _options = options;
         ConnectionId = connectionId;
         _url = url;
-        RangeStart = rangeStart;
-        RangeEnd = rangeEnd;
+        _range = new SegmentRange(rangeStart, rangeEnd);
         ChunkFilePath = chunkFilePath;
         _settings = settings;
         _bandwidthLimiter = bandwidthLimiter ?? UnlimitedBandwidthLimiter.Instance;
@@ -78,7 +80,11 @@ public sealed class DownloadConnection : IDownloadConnection
     /// open-ended range and reads until the stream closes, so the short-transfer
     /// check at the end of a fetch has nothing to measure against.
     /// </summary>
-    private bool IsUnbounded => RangeEnd == RangeSplitter.UnboundedEnd;
+    private bool IsUnbounded => _range.IsUnbounded;
+
+    public long CommittedEnd => _range.CommittedEnd(RangeStart + BytesDownloaded);
+
+    public bool TryShrinkEnd(long newEnd) => _range.TryShrinkEnd(newEnd, RangeStart + BytesDownloaded);
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -165,37 +171,43 @@ public sealed class DownloadConnection : IDownloadConnection
 
         using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
 
-        long remaining = RangeEnd - start + 1;
         var buffer = new byte[bufferSize];
-        while (remaining > 0)
+        try
         {
-            // Ask before reading, not after: the allowance caps how much this
-            // read may pull off the socket, so the connection never overshoots
-            // the limit and then sleeps it off. With no limit configured this
-            // returns the full buffer without touching a lock.
-            int allowance = await _bandwidthLimiter.RequestAsync(buffer.Length, cancellationToken).ConfigureAwait(false);
-
-            // Clamped to what is left of the segment as well, exactly as the FTP
-            // connection does. A whole-file response accepted above — or a server
-            // that simply sends more than it was asked for — would otherwise run
-            // this chunk on over its neighbour's bytes.
-            int wanted = (int)Math.Min(allowance, remaining);
-
-            int bytesRead = wanted <= 0
-                ? 0
-                : await responseStream.ReadAsync(buffer.AsMemory(0, wanted), cancellationToken).ConfigureAwait(false);
-
-            if (bytesRead <= 0)
+            while (true)
             {
-                _bandwidthLimiter.Return(allowance);
-                break;
+                // Ask before reading, not after: the allowance caps how much this
+                // read may pull off the socket, so the connection never overshoots
+                // the limit and then sleeps it off. With no limit configured this
+                // returns the full buffer without touching a lock.
+                int allowance = await _bandwidthLimiter.RequestAsync(buffer.Length, cancellationToken).ConfigureAwait(false);
+
+                // Clamped to what is left of the segment, and reserved against a
+                // split: the pool may shorten this range while it reads, but never
+                // inside a read already under way. A whole-file response accepted
+                // above — or a server that simply sends more than it was asked for —
+                // would otherwise run this chunk on over its neighbour's bytes.
+                int wanted = _range.Reserve(RangeStart + BytesDownloaded, allowance);
+
+                int bytesRead = wanted <= 0
+                    ? 0
+                    : await responseStream.ReadAsync(buffer.AsMemory(0, wanted), cancellationToken).ConfigureAwait(false);
+
+                if (bytesRead <= 0)
+                {
+                    _bandwidthLimiter.Return(allowance);
+                    break;
+                }
+
+                _bandwidthLimiter.Return(allowance - bytesRead);
+
+                await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken).ConfigureAwait(false);
+                Interlocked.Add(ref _bytesDownloaded, bytesRead);
             }
-
-            _bandwidthLimiter.Return(allowance - bytesRead);
-
-            await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken).ConfigureAwait(false);
-            Interlocked.Add(ref _bytesDownloaded, bytesRead);
-            remaining -= bytesRead;
+        }
+        finally
+        {
+            _range.Release(RangeStart + BytesDownloaded);
         }
 
         await fileStream.FlushAsync(cancellationToken).ConfigureAwait(false);
@@ -205,6 +217,7 @@ public sealed class DownloadConnection : IDownloadConnection
         // the end of its loop, and the merge writes the hole into the final file.
         // Reported so RetryPolicy gets a turn — and because the bytes that did
         // arrive are still on disk, the retry carries on from them.
+        long remaining = RangeEnd - (RangeStart + BytesDownloaded) + 1;
         if (remaining > 0 && !IsUnbounded)
             throw new IOException($"The connection ended {remaining} bytes early.");
 

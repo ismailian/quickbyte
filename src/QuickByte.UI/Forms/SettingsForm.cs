@@ -48,6 +48,7 @@ public sealed class SettingsForm : Form
     private CheckBox _autoOpenDetailsCheckBox = null!;
     private CheckBox _showCompletionCheckBox = null!;
     private CheckBox _monitorClipboardCheckBox = null!;
+    private CheckBox _dynamicSegmentationCheckBox = null!;
     private ComboBox _appearanceBox = null!;
     private CheckBox _sortByCategoryCheckBox = null!;
     private readonly Dictionary<FileCategory, TextBox> _categoryFolderTextBoxes = new();
@@ -100,7 +101,7 @@ public sealed class SettingsForm : Form
 
     private void BuildConnectionTab(Panel page)
     {
-        var layout = NewGrid(page, rows: 5);
+        var layout = NewGrid(page, rows: 6);
         int row = 0;
 
         _defaultConnectionsBox = AddConnectionsRow(layout, row++,
@@ -126,6 +127,11 @@ public sealed class SettingsForm : Form
             "Retry base delay (ms)",
             "Grows with exponential backoff on each successive retry.",
             100, 60000, increment: 100);
+
+        _dynamicSegmentationCheckBox = AddCheckRow(layout, row++,
+            "Split the slowest segment when a connection finishes early");
+        _tips.SetToolTip(_dynamicSegmentationCheckBox,
+            "Keeps every connection busy until the end. Turn off for a server that refuses new connections mid-download.");
 
     }
 
@@ -572,6 +578,7 @@ public sealed class SettingsForm : Form
         _defaultConnectionsBox.Connections = s.DefaultConnectionsCount;
         _maxRetriesUpDown.Value = Math.Clamp(s.MaxRetries, 0, 20);
         _retryDelayUpDown.Value = Math.Clamp(s.RetryDelayMilliseconds, 100, 60000);
+        _dynamicSegmentationCheckBox.Checked = s.DynamicSegmentation;
         _maxConcurrentUpDown.Value = Math.Clamp(s.MaxConcurrentDownloads, 1, 20);
         _globalSpeedLimitUpDown.Value = Math.Clamp(s.GlobalSpeedLimitBytesPerSecond / ByteFormatter.BytesPerKilobyte, 0, 1_000_000);
         _progressIntervalUpDown.Value = Math.Clamp(s.ProgressUpdateIntervalMilliseconds, 50, 2000);
@@ -640,6 +647,7 @@ public sealed class SettingsForm : Form
             DefaultConnectionsCount = _defaultConnectionsBox.Connections,
             MaxRetries = (int)_maxRetriesUpDown.Value,
             RetryDelayMilliseconds = (int)_retryDelayUpDown.Value,
+            DynamicSegmentation = _dynamicSegmentationCheckBox.Checked,
             MaxConcurrentDownloads = (int)_maxConcurrentUpDown.Value,
             GlobalSpeedLimitBytesPerSecond = (long)_globalSpeedLimitUpDown.Value * ByteFormatter.BytesPerKilobyte,
             ProgressUpdateIntervalMilliseconds = (int)_progressIntervalUpDown.Value,

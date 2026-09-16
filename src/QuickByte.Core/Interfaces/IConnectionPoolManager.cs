@@ -37,5 +37,12 @@ public interface IConnectionPoolManager
     /// </summary>
     void DiscardChunks(string tempFolder);
 
+    /// <summary>
+    /// Forgets the chunk layout this pool recorded in <paramref name="tempFolder"/>
+    /// — called once the chunks have been merged and there is nothing left for it
+    /// to describe.
+    /// </summary>
+    void ForgetLayout(string tempFolder);
+
     IReadOnlyList<string> GetOrderedChunkPaths();
 }

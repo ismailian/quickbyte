@@ -35,6 +35,14 @@ public sealed class DownloadSettings
     /// <summary>Default number of simultaneous connections for new downloads (1-32).</summary>
     public int DefaultConnectionsCount { get; set; } = DefaultConnections;
 
+    /// <summary>
+    /// When a connection finishes early, give its slot to the back half of the
+    /// slowest running segment instead of leaving it idle — see
+    /// <see cref="Services.ConnectionPoolManager"/>. On by default; the switch is
+    /// for a server that treats every new connection as suspicious.
+    /// </summary>
+    public bool DynamicSegmentation { get; set; } = true;
+
     /// <summary>Maximum retry attempts per connection before it is marked Failed.</summary>
     public int MaxRetries { get; set; } = 3;
 

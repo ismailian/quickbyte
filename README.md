@@ -150,6 +150,21 @@ to Core's events. This means the download engine could be reused headless
    progress events off a `Timer` (default every 300 ms) rather than
    forwarding every connection's raw byte events — this is what keeps the
    UI smooth regardless of how many connections are active.
+
+   **Dynamic segmentation.** A fixed split is only as fast as its slowest
+   range: when seven connections finish and the eighth crawls, the download
+   crawls on one connection. So when a connection finishes, its slot goes to the
+   back half of whichever running range has the most left — that range is
+   shortened while it streams and a new connection fetches the rest into a chunk
+   of its own. Two rules keep it correct: a connection *reserves* each read before
+   making it, and a range can only be shortened beyond everything written or
+   reserved, so no byte ever lands in two chunks; and the layout is written to
+   `segments.json` before the new connection writes anything, so resume after a
+   crash knows exactly which chunk holds which bytes. It never runs more
+   connections than the download's count, skips ranges under 1 MiB, and — since a
+   rate-limited server can answer the new connection with `429` — the first
+   failure stops splitting and a split-off range is retried quietly rather than
+   failing the download. Options → Connection can turn it off.
 5. **`IDownloadConnection`** (`DownloadConnection` / `FtpDownloadConnection`)
    — downloads exactly one byte range into its own temp `.tmp` chunk file:
    over HTTP with a `Range` request, over FTP with `REST` plus a byte count

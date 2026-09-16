@@ -22,7 +22,7 @@ namespace QuickByte.Core.Services.Ftp;
 /// transfer type, restart offset), so two segments cannot take turns on one.</item>
 /// </list>
 /// </summary>
-public sealed class FtpDownloadConnection : IDownloadConnection
+public sealed class FtpDownloadConnection : IResizableConnection
 {
     private readonly Uri _uri;
     private readonly string _path;
@@ -38,9 +38,12 @@ public sealed class FtpDownloadConnection : IDownloadConnection
     private volatile ConnectionStatus _status = ConnectionStatus.Idle;
     private volatile string? _lastError;
 
+    /// <summary>The range, which a split may shorten while this runs — see <see cref="SegmentRange"/>.</summary>
+    private readonly SegmentRange _range;
+
     public int ConnectionId { get; }
-    public long RangeStart { get; }
-    public long RangeEnd { get; }
+    public long RangeStart => _range.Start;
+    public long RangeEnd => _range.End;
     public string ChunkFilePath { get; }
 
     public long BytesDownloaded => Interlocked.Read(ref _bytesDownloaded);
@@ -62,8 +65,7 @@ public sealed class FtpDownloadConnection : IDownloadConnection
         ConnectionId = connectionId;
         _uri = new Uri(url);
         _path = FtpUrl.PathOf(_uri);
-        RangeStart = rangeStart;
-        RangeEnd = rangeEnd;
+        _range = new SegmentRange(rangeStart, rangeEnd);
         ChunkFilePath = chunkFilePath;
         _settings = settings;
         _bandwidthLimiter = bandwidthLimiter ?? UnlimitedBandwidthLimiter.Instance;
@@ -72,6 +74,10 @@ public sealed class FtpDownloadConnection : IDownloadConnection
     }
 
     private long TotalBytes => RangeEnd - RangeStart + 1;
+
+    public long CommittedEnd => _range.CommittedEnd(RangeStart + BytesDownloaded);
+
+    public bool TryShrinkEnd(long newEnd) => _range.TryShrinkEnd(newEnd, RangeStart + BytesDownloaded);
 
     /// <summary>
     /// True when this connection was handed no real end — see
@@ -150,34 +156,42 @@ public sealed class FtpDownloadConnection : IDownloadConnection
         fileStream.Seek(start - RangeStart, SeekOrigin.Begin);
 
         var buffer = new byte[bufferSize];
-        while (remaining > 0)
+        try
         {
-            // Ask before reading, exactly as the HTTP connection does, so the
-            // limiter caps what comes off the socket instead of sleeping off an
-            // overshoot. The read is additionally clamped to what is left of the
-            // segment — FTP would otherwise run on to the end of the file and
-            // this chunk would overwrite its neighbour's bytes.
-            int allowance = await _bandwidthLimiter.RequestAsync(buffer.Length, cancellationToken).ConfigureAwait(false);
-            int wanted = (int)Math.Min(allowance, remaining);
-
-            int bytesRead = wanted <= 0
-                ? 0
-                : await dataStream.ReadAsync(buffer.AsMemory(0, wanted), cancellationToken).ConfigureAwait(false);
-
-            if (bytesRead <= 0)
+            while (true)
             {
-                _bandwidthLimiter.Return(allowance);
-                break;
+                // Ask before reading, exactly as the HTTP connection does, so the
+                // limiter caps what comes off the socket instead of sleeping off an
+                // overshoot. The read is additionally clamped to what is left of the
+                // segment, and reserved against a split — FTP would otherwise run on
+                // to the end of the file and this chunk would overwrite its
+                // neighbour's bytes.
+                int allowance = await _bandwidthLimiter.RequestAsync(buffer.Length, cancellationToken).ConfigureAwait(false);
+                int wanted = _range.Reserve(RangeStart + BytesDownloaded, allowance);
+
+                int bytesRead = wanted <= 0
+                    ? 0
+                    : await dataStream.ReadAsync(buffer.AsMemory(0, wanted), cancellationToken).ConfigureAwait(false);
+
+                if (bytesRead <= 0)
+                {
+                    _bandwidthLimiter.Return(allowance);
+                    break;
+                }
+
+                _bandwidthLimiter.Return(allowance - bytesRead);
+
+                await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken).ConfigureAwait(false);
+                Interlocked.Add(ref _bytesDownloaded, bytesRead);
             }
-
-            _bandwidthLimiter.Return(allowance - bytesRead);
-
-            await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken).ConfigureAwait(false);
-            Interlocked.Add(ref _bytesDownloaded, bytesRead);
-            remaining -= bytesRead;
+        }
+        finally
+        {
+            _range.Release(RangeStart + BytesDownloaded);
         }
 
         await fileStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+        remaining = RangeEnd - (RangeStart + BytesDownloaded) + 1;
 
         // A stream that ended early left the segment short. Reported as a failure
         // so the retry policy gets a turn — silently accepting it would hand the
