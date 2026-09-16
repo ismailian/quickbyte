@@ -455,6 +455,54 @@ public sealed class DownloadServiceTests
         Assert.Equal(1, fixture.Merger.Discards);
     }
 
+    // -------------------------------------------------------------- checksum --
+
+    [Fact]
+    public async Task A_file_that_matches_its_checksum_is_verified_and_then_complete()
+    {
+        using var fixture = new Fixture();
+        fixture.Merger.WriteDestination = true; // writes 01 02 03
+        fixture.Item.ExpectedChecksum = "sha256:039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81";
+
+        await fixture.Service.StartAsync();
+
+        Assert.Equal(DownloadStatus.Completed, fixture.Item.Status);
+        Assert.Equal(ChecksumResult.Match, fixture.Item.ChecksumResult);
+        Assert.Equal(
+            new[] { DownloadStatus.Merging, DownloadStatus.Verifying, DownloadStatus.Completed },
+            fixture.StatusHistory.SkipWhile(s => s != DownloadStatus.Merging));
+    }
+
+    [Fact]
+    public async Task A_file_that_does_not_match_its_checksum_fails_instead_of_completing()
+    {
+        // A damaged or substituted file must not open from a "Download complete"
+        // window, or set off the shutdown queued behind it.
+        using var fixture = new Fixture();
+        fixture.Merger.WriteDestination = true;
+        fixture.Item.ExpectedChecksum = "sha256:" + new string('0', 64);
+
+        await fixture.Service.StartAsync();
+
+        Assert.Equal(DownloadStatus.Failed, fixture.Item.Status);
+        Assert.Equal(ChecksumResult.Mismatch, fixture.Item.ChecksumResult);
+        Assert.Contains("SHA-256", fixture.Item.ErrorMessage);
+        Assert.DoesNotContain(DownloadStatus.Completed, fixture.StatusHistory);
+        Assert.Null(fixture.Item.CompletedAt);
+    }
+
+    [Fact]
+    public async Task A_download_without_a_checksum_is_never_verified()
+    {
+        using var fixture = new Fixture();
+        fixture.Merger.WriteDestination = true;
+
+        await fixture.Service.StartAsync();
+
+        Assert.DoesNotContain(DownloadStatus.Verifying, fixture.StatusHistory);
+        Assert.Equal(ChecksumResult.NotChecked, fixture.Item.ChecksumResult);
+    }
+
     // --------------------------------------------------- the mark of the web --
 
     [Fact]

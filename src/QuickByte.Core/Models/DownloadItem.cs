@@ -74,6 +74,15 @@ public sealed class DownloadItem
     /// <summary>What to do with the computer when this download finishes. One-shot by nature: it only finishes once.</summary>
     public PowerAction PowerActionWhenDone { get; set; }
 
+    /// <summary>
+    /// The checksum the finished file must match, in <c>sha256:…</c> form, or null.
+    /// Checked as the last step before the download counts as complete.
+    /// </summary>
+    public string? ExpectedChecksum { get; set; }
+
+    /// <summary>What checking <see cref="ExpectedChecksum"/> found.</summary>
+    public Helpers.ChecksumResult ChecksumResult { get; set; }
+
     public DownloadStatus Status { get; set; } = DownloadStatus.Queued;
     public string? ErrorMessage { get; set; }
 
@@ -143,7 +152,7 @@ public sealed class DownloadItem
     public DownloadCategory Category => Status switch
     {
         DownloadStatus.Queued => DownloadCategory.Queued,
-        DownloadStatus.Connecting or DownloadStatus.Downloading or DownloadStatus.Merging => DownloadCategory.InProgress,
+        DownloadStatus.Connecting or DownloadStatus.Downloading or DownloadStatus.Merging or DownloadStatus.Verifying => DownloadCategory.InProgress,
         DownloadStatus.Paused => DownloadCategory.Paused,
         DownloadStatus.Completed => DownloadCategory.Completed,
         DownloadStatus.Failed or DownloadStatus.Cancelled => DownloadCategory.Failed,

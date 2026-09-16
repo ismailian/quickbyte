@@ -19,6 +19,7 @@ public sealed class TaskbarProgressTests
     [InlineData(DownloadStatus.Downloading)]
     [InlineData(DownloadStatus.Connecting)]
     [InlineData(DownloadStatus.Merging)]
+    [InlineData(DownloadStatus.Verifying)]
     public void A_download_in_flight_shows_a_bar(DownloadStatus status)
     {
         Assert.Equal(TaskbarProgressState.Normal, TaskbarProgress.StateFor(status, sizeKnown: true, percentage: 42));

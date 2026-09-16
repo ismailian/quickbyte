@@ -1,5 +1,6 @@
 using QuickByte.Core.Enums;
 using QuickByte.Core.Events;
+using QuickByte.Core.Helpers;
 using QuickByte.Core.Interfaces;
 using QuickByte.Core.Models;
 using QuickByte.Core.Services;
@@ -568,6 +569,8 @@ public sealed class QueueManagerTests
         public Task RetryAsync(Guid downloadId) => ResumeAsync(downloadId);
         public void Remove(Guid downloadId, bool deleteFile) { }
         public bool ChangeAddress(Guid downloadId, AddressChange change) => false;
+        public Task<ChecksumResult> VerifyChecksumAsync(Guid downloadId, ExpectedChecksum expected, IProgress<long>? progress, CancellationToken cancellationToken) =>
+            Task.FromResult(ChecksumResult.NotChecked);
         public long GlobalSpeedLimitBytesPerSecond => 0;
         public void SetSpeedLimit(Guid downloadId, long bytesPerSecond) { }
         public void SetCompletionActions(Guid downloadId, CompletionActions actions, PowerAction power) { }

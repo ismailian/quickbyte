@@ -57,5 +57,9 @@ public static class DownloadActions
 
     /// <summary>Occupying a connection slot right now — drives the status bar, the tray tooltip and "Stop All".</summary>
     public static bool IsActive(DownloadItem item) =>
-        item.Status is DownloadStatus.Connecting or DownloadStatus.Downloading or DownloadStatus.Merging;
+        item.Status is DownloadStatus.Connecting or DownloadStatus.Downloading
+            or DownloadStatus.Merging or DownloadStatus.Verifying;
+
+    /// <summary>A checksum can be checked against any finished file that is still where it was saved.</summary>
+    public static bool CanVerifyChecksum(DownloadItem item) => CanOpenFile(item);
 }

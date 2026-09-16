@@ -173,6 +173,7 @@ public sealed class DownloadActionsTests
     [InlineData(DownloadStatus.Connecting, true)]
     [InlineData(DownloadStatus.Downloading, true)]
     [InlineData(DownloadStatus.Merging, true)]
+    [InlineData(DownloadStatus.Verifying, true)]
     [InlineData(DownloadStatus.Queued, false)]
     [InlineData(DownloadStatus.Paused, false)]
     [InlineData(DownloadStatus.Completed, false)]

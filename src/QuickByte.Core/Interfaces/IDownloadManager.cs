@@ -53,6 +53,15 @@ public interface IDownloadManager
     /// </summary>
     bool ChangeAddress(Guid downloadId, AddressChange change);
 
+    /// <summary>
+    /// Checks a completed download's file against a checksum given after the fact,
+    /// persists the result and announces it. Returns
+    /// <see cref="Helpers.ChecksumResult.NotChecked"/> for a download with no file
+    /// to check.
+    /// </summary>
+    Task<Helpers.ChecksumResult> VerifyChecksumAsync(
+        Guid downloadId, Helpers.ExpectedChecksum expected, IProgress<long>? progress, CancellationToken cancellationToken);
+
     /// <summary>The application-wide cap in bytes per second; 0 means unlimited.</summary>
     long GlobalSpeedLimitBytesPerSecond { get; }
 

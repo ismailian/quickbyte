@@ -808,6 +808,19 @@ Every window is styled after classic IDM, on a single flat palette defined in
   that is not a full path — which only a hand-edited `settings.json` could
   produce — is ignored rather than resolved against wherever the app started
   (`DownloadSettings.FolderFor`).
+- **Checksums** — paste the SHA-256 (or SHA-512, SHA-384, SHA-1, MD5) from a
+  download page into Add Download's optional *Checksum* box, and the finished
+  file is checked before the download counts as complete: a new *Verifying*
+  step after the merge. A match is shown in the list and the completion window
+  (`✓ SHA-256 verified`); a mismatch **fails** the download with a message
+  saying so, so a damaged or substituted file never opens from a "Download
+  complete" window or sets off the shutdown queued behind it. The file is left
+  where it is, to look at. A checksum found later can be checked from the row's
+  *Verify Checksum…* or the completion window. It reads the forms download
+  pages list — bare hex (the length says which hash), `sha256:…`, a
+  `sha256sum` line with the file name after it, BSD's `SHA256 (file) = …` — and
+  says plainly that MD5 and SHA-1 prove a file arrived intact but not that
+  nobody forged it (`FileChecksum`).
 - **Sign In** — a small modal that appears only when a server answers a probe
   with a `401` or an FTP `530`. It names the host, repeats what the server
   said, and hands the login straight back to the fetch that was refused.

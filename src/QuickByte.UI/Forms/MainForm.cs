@@ -99,6 +99,7 @@ public sealed class MainForm : Form
     private ToolStripMenuItem _rowStop = null!;
     private ToolStripMenuItem _rowRetry = null!;
     private ToolStripMenuItem _rowRefreshAddress = null!;
+    private ToolStripMenuItem _rowVerifyChecksum = null!;
     private ToolStripMenuItem _rowRemove = null!;
     private ToolStripMenuItem _rowProperties = null!;
     private ToolStripMenuItem _rowAddToQueue = null!;
@@ -650,7 +651,7 @@ public sealed class MainForm : Form
         var unfinishedNode = new TreeNode("Unfinished")
         {
             Tag = (Func<DownloadItem, bool>)(item => item.Status is DownloadStatus.Queued or DownloadStatus.Connecting
-                or DownloadStatus.Downloading or DownloadStatus.Paused or DownloadStatus.Merging),
+                or DownloadStatus.Downloading or DownloadStatus.Paused or DownloadStatus.Merging or DownloadStatus.Verifying),
             ImageKey = "unfinished",
             SelectedImageKey = "unfinished"
         };
@@ -811,6 +812,7 @@ public sealed class MainForm : Form
         _rowStop = MenuEntry("Stop", IconFactory.Stop(16), (_, _) => OnStopClicked());
         _rowRetry = MenuEntry("Retry", IconFactory.Retry(16), async (_, _) => await OnRetryClickedAsync());
         _rowRefreshAddress = MenuEntry("Refresh Download Address...", IconFactory.RefreshAddress(16), (_, _) => OnRefreshAddressClicked());
+        _rowVerifyChecksum = MenuEntry("Verify Checksum...", IconFactory.CheckCircle(16), (_, _) => OpenChecksumWindow(SelectedItem));
         _rowRemove = MenuEntry("Remove", IconFactory.Delete(16), (_, _) => OnRemoveClicked());
         _rowProperties = MenuEntry("Properties...", IconFactory.Properties(16), (_, _) => OpenSelectedDetailsWindow());
 
@@ -829,7 +831,7 @@ public sealed class MainForm : Form
         };
         menu.Items.AddRange(new ToolStripItem[]
         {
-            _rowOpenFile, _rowOpenFolder, new ToolStripSeparator(),
+            _rowOpenFile, _rowOpenFolder, _rowVerifyChecksum, new ToolStripSeparator(),
             _rowResume, _rowPause, _rowStop, _rowRetry, _rowRefreshAddress, new ToolStripSeparator(),
             _rowAddToQueue, _rowRemoveFromQueue, new ToolStripSeparator(),
             _rowRemove, new ToolStripSeparator(),
@@ -858,6 +860,7 @@ public sealed class MainForm : Form
 
         _rowOpenFile.Available = single is not null && DownloadActions.CanOpenFile(single);
         _rowOpenFolder.Available = single is not null && DownloadActions.CanOpenFolder(single);
+        _rowVerifyChecksum.Available = single is not null && DownloadActions.CanVerifyChecksum(single);
         _rowProperties.Available = single is not null;
         _rowRefreshAddress.Available = single is not null && DownloadActions.CanRefreshAddress(single);
 
@@ -977,7 +980,7 @@ public sealed class MainForm : Form
         DownloadStatus.Completed => Theme.Success,
         DownloadStatus.Failed or DownloadStatus.Cancelled => Theme.Danger,
         DownloadStatus.Paused => Theme.Warning,
-        DownloadStatus.Downloading or DownloadStatus.Connecting or DownloadStatus.Merging => Theme.Accent,
+        DownloadStatus.Downloading or DownloadStatus.Connecting or DownloadStatus.Merging or DownloadStatus.Verifying => Theme.Accent,
         _ => Theme.TextMuted
     };
 
@@ -986,6 +989,7 @@ public sealed class MainForm : Form
         DownloadStatus.Connecting => "Connecting",
         DownloadStatus.Downloading => "Downloading",
         DownloadStatus.Merging => $"Merging {ByteFormatter.FormatPercentage(item.MergeProgressPercentage)}",
+        DownloadStatus.Verifying => $"Verifying {ByteFormatter.FormatPercentage(item.MergeProgressPercentage)}",
         DownloadStatus.Completed => "Complete",
         DownloadStatus.Cancelled => "Cancelled",
         _ => item.Status.ToString()
@@ -1104,10 +1108,24 @@ public sealed class MainForm : Form
         if (plan.PlaySound) System.Media.SystemSounds.Asterisk.Play();
 
         if (_settingsService.Current.ShowCompletionWindow)
-            ShowIndependently(new DownloadCompleteForm(item, _settingsService));
+            ShowIndependently(new DownloadCompleteForm(item, _settingsService, OpenChecksumWindow));
 
         if (plan.HasPowerAction)
             StartPowerCountdown(plan, $"{item.FileName} finished downloading");
+    }
+
+    /// <summary>Opens Verify Checksum for a finished download, or brings its window forward.</summary>
+    private void OpenChecksumWindow(DownloadItem? item)
+    {
+        if (item is null || !DownloadActions.CanVerifyChecksum(item)) return;
+
+        var existing = _childWindows.OfType<ChecksumForm>().FirstOrDefault(form => form.Item.Id == item.Id);
+        if (existing is not null)
+        {
+            ForceToForeground(existing);
+            return;
+        }
+        ShowIndependently(new ChecksumForm(item, _downloadManager));
     }
 
     /// <summary>A queue's run ended. If it worked through every file, whatever the queue asked for next happens.</summary>
@@ -1182,7 +1200,16 @@ public sealed class MainForm : Form
         if (item.Status == DownloadStatus.Failed && !string.IsNullOrWhiteSpace(item.ErrorMessage))
             return item.ErrorMessage!;
         if (item.Status == DownloadStatus.Completed && item.CompletedAt is not null)
-            return item.CompletedAt.Value.LocalDateTime.ToString("g");
+        {
+            string when = item.CompletedAt.Value.LocalDateTime.ToString("g");
+            return item.ChecksumResult switch
+            {
+                ChecksumResult.Match when FileChecksum.FromStored(item.ExpectedChecksum) is { } sum =>
+                    $"✓ {FileChecksum.Name(sum.Algorithm)} verified · {when}",
+                ChecksumResult.Mismatch => $"✗ Checksum does not match · {when}",
+                _ => when
+            };
+        }
         return string.IsNullOrEmpty(item.ContentType) ? "—" : item.ContentType;
     }
 

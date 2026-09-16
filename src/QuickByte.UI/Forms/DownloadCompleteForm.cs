@@ -21,11 +21,14 @@ public sealed class DownloadCompleteForm : Form
 {
     private readonly DownloadItem _item;
     private readonly ISettingsService _settingsService;
+    private readonly Action<DownloadItem>? _verifyChecksum;
 
-    public DownloadCompleteForm(DownloadItem item, ISettingsService settingsService)
+    /// <param name="verifyChecksum">Opens Verify Checksum for this download; null leaves the link out.</param>
+    public DownloadCompleteForm(DownloadItem item, ISettingsService settingsService, Action<DownloadItem>? verifyChecksum = null)
     {
         _item = item;
         _settingsService = settingsService;
+        _verifyChecksum = verifyChecksum;
         BuildUi();
     }
 
@@ -33,7 +36,7 @@ public sealed class DownloadCompleteForm : Form
     {
         Text = "Download Complete";
         Width = 580;
-        Height = 320;
+        Height = 348;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         // Independent of the main window, which is routinely in the tray by the
         // time a download finishes: without a taskbar button of its own this
@@ -91,7 +94,7 @@ public sealed class DownloadCompleteForm : Form
     {
         var body = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Surface, Padding = new Padding(22, 4, 22, 4) };
 
-        var card = new Panel { Dock = DockStyle.Top, Height = 96, BackColor = Theme.HeaderBack, Padding = new Padding(14, 10, 14, 10) };
+        var card = new Panel { Dock = DockStyle.Top, Height = 122, BackColor = Theme.HeaderBack, Padding = new Padding(14, 10, 14, 10) };
         card.Paint += (_, e) =>
         {
             using var pen = new Pen(Theme.Border);
@@ -102,22 +105,67 @@ public sealed class DownloadCompleteForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 2,
-            RowCount = 4,
+            RowCount = 5,
             BackColor = Theme.HeaderBack
         };
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 78));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 86));
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < 4; i++)
             grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
         grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); // absorbs leftover height
 
         AddCell(grid, "File:", _item.FileName, 0);
         AddCell(grid, "Size:", ByteFormatter.FormatBytes(_item.TotalBytes), 1);
         AddCell(grid, "Saved to:", _item.SaveFolder, 2);
+        AddChecksumCell(grid, 3);
 
         card.Controls.Add(grid);
         body.Controls.Add(card);
         return body;
+    }
+
+    /// <summary>What the checksum check found, or a link to run one.</summary>
+    private void AddChecksumCell(TableLayoutPanel grid, int row)
+    {
+        grid.Controls.Add(new Label
+        {
+            Text = "Checksum:",
+            AutoSize = true,
+            ForeColor = Theme.TextMuted,
+            Font = Theme.UiSmall,
+            Anchor = AnchorStyles.Left,
+            Margin = new Padding(0, 4, 6, 4)
+        }, 0, row);
+
+        var sum = FileChecksum.FromStored(_item.ExpectedChecksum);
+        if (_item.ChecksumResult == ChecksumResult.Match && sum is not null)
+        {
+            grid.Controls.Add(new Label
+            {
+                Text = $"✓ {FileChecksum.Name(sum.Algorithm)} verified",
+                Dock = DockStyle.Fill,
+                ForeColor = Theme.Success,
+                Font = Theme.UiBold,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Margin = new Padding(0, 3, 8, 3)
+            }, 1, row);
+            return;
+        }
+
+        if (_verifyChecksum is null) return;
+
+        var link = new LinkLabel
+        {
+            Text = "Verify against the publisher's checksum…",
+            Dock = DockStyle.Fill,
+            Font = Theme.Ui,
+            LinkColor = Theme.Accent,
+            ActiveLinkColor = Theme.AccentDark,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Margin = new Padding(0, 3, 8, 3)
+        };
+        link.LinkClicked += (_, _) => _verifyChecksum(_item);
+        grid.Controls.Add(link, 1, row);
     }
 
     private static void AddCell(TableLayoutPanel grid, string caption, string value, int row)

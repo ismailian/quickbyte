@@ -146,7 +146,7 @@ public sealed class TaskbarProgress : NativeWindow, IDisposable
         DownloadStatus.Failed => TaskbarProgressState.Error,
         DownloadStatus.Paused => TaskbarProgressState.Paused,
         DownloadStatus.Connecting when percentage <= 0 => TaskbarProgressState.Indeterminate,
-        DownloadStatus.Connecting or DownloadStatus.Downloading or DownloadStatus.Merging =>
+        DownloadStatus.Connecting or DownloadStatus.Downloading or DownloadStatus.Merging or DownloadStatus.Verifying =>
             sizeKnown ? TaskbarProgressState.Normal : TaskbarProgressState.Indeterminate,
         _ => TaskbarProgressState.None,
     };

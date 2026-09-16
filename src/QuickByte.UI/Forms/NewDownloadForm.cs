@@ -56,6 +56,7 @@ public sealed class NewDownloadForm : Form
     private Label _rangeSupportLabel = null!;
     private ConnectionCountBox _connectionsBox = null!;
     private ComboBox _queueComboBox = null!;
+    private TextBox _checksumTextBox = null!;
     private Button _okButton = null!;
 
     private RemoteFileInfo? _fetchedInfo;
@@ -164,7 +165,7 @@ public sealed class NewDownloadForm : Form
         Width = 580;
         // 34 px shorter than it was: the login row it used to carry is a dialog
         // of its own now, shown only when a server asks for a login.
-        Height = 572;
+        Height = 610;
         // Shown modeless and unowned by MainForm, so it is a window in its own
         // right: it gets a taskbar button, it can be minimised out of the way
         // while the fetch runs, and CenterParent would have no parent to centre
@@ -194,7 +195,7 @@ public sealed class NewDownloadForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 3,
-            RowCount = 8,
+            RowCount = 9,
             BackColor = Theme.Surface,
             AutoSize = false
         };
@@ -205,7 +206,7 @@ public sealed class NewDownloadForm : Form
         // Address · status · info card · save as · save to · connections · queue,
         // then a percent-sized filler — without it the last real row swallows all
         // the leftover height and its label floats out of line with its field.
-        foreach (int height in new[] { 38, 26, 80, 38, 38, 38, 38 })
+        foreach (int height in new[] { 38, 26, 80, 38, 38, 38, 38, 38 })
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
@@ -325,6 +326,15 @@ public sealed class NewDownloadForm : Form
 
         layout.Controls.Add(_queueComboBox, 1, row);
         layout.SetColumnSpan(_queueComboBox, 2);
+        row++;
+
+        // --- Checksum (optional) ----------------------------------------------
+        layout.Controls.Add(FormChrome.FieldLabel("Checksum"), 0, row);
+        _checksumTextBox = FormChrome.Field();
+        _checksumTextBox.Font = Theme.Mono;
+        _checksumTextBox.PlaceholderText = "Optional — SHA-256, SHA-1 or MD5 from the download page";
+        layout.Controls.Add(_checksumTextBox, 1, row);
+        layout.SetColumnSpan(_checksumTextBox, 2);
 
         body.Controls.Add(layout);
         return body;
@@ -554,6 +564,18 @@ public sealed class NewDownloadForm : Form
             return;
         }
 
+        ExpectedChecksum? checksum = null;
+        if (!string.IsNullOrWhiteSpace(_checksumTextBox.Text))
+        {
+            checksum = FileChecksum.Parse(_checksumTextBox.Text);
+            if (checksum is null)
+            {
+                SetStatus("That checksum is not one QuickByte recognises. Paste the hex value, or leave it empty.", Theme.Danger);
+                _checksumTextBox.Focus();
+                return;
+            }
+        }
+
         SelectedQueueId = (_queueComboBox.SelectedItem as QueueChoice)?.QueueId;
 
         Result = new DownloadRequest(
@@ -565,6 +587,7 @@ public sealed class NewDownloadForm : Form
         {
             Credentials = _credentials,
             Headers = _capturedHeaders,
+            ExpectedChecksum = checksum,
             StartImmediately = SelectedQueueId is null
         };
 

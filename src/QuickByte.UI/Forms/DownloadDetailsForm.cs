@@ -673,7 +673,7 @@ public sealed class DownloadDetailsForm : Form
         long total = progress?.TotalBytes ?? _item.TotalBytes;
         double speed = progress?.SpeedBytesPerSecond ?? _item.CurrentSpeedBytesPerSecond;
         var eta = progress?.EstimatedTimeRemaining ?? _item.EstimatedTimeRemaining;
-        bool merging = _item.Status == DownloadStatus.Merging;
+        bool merging = _item.Status is DownloadStatus.Merging or DownloadStatus.Verifying;
 
         _sizeValueLabel.Text = total > 0 ? ByteFormatter.FormatBytes(total) : "Unknown";
         double percentage = total > 0 ? Math.Min(100.0, downloaded * 100.0 / total) : 0;
@@ -692,7 +692,7 @@ public sealed class DownloadDetailsForm : Form
         // While merging the bar stays full and reports merge progress as text —
         // the bytes are already on disk, so rewinding the bar would be a lie.
         _overallProgressBar.OverlayText = merging
-            ? $"Merging file parts…  {ByteFormatter.FormatPercentage(progress?.MergePercentage ?? _item.MergeProgressPercentage)}"
+            ? $"{StatusText(_item.Status)}  {ByteFormatter.FormatPercentage(progress?.MergePercentage ?? _item.MergeProgressPercentage)}"
             : null;
         _overallProgressBar.SetValue(percentage, immediate);
 
@@ -712,6 +712,7 @@ public sealed class DownloadDetailsForm : Form
         DownloadStatus.Connecting => "Connecting…",
         DownloadStatus.Downloading => "Receiving data…",
         DownloadStatus.Merging => "Merging file parts…",
+        DownloadStatus.Verifying => "Verifying checksum…",
         DownloadStatus.Paused => "Paused",
         DownloadStatus.Completed => "Complete",
         DownloadStatus.Failed => "Failed",

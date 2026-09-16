@@ -130,6 +130,15 @@ public sealed class DownloadManager : IDownloadManager
             if (item.Status is DownloadStatus.Downloading or DownloadStatus.Connecting or DownloadStatus.Merging)
                 item.Status = DownloadStatus.Paused;
 
+            // Interrupted while checking its checksum: the file is already whole and
+            // in place, and its chunks are gone, so resuming would fetch it all
+            // again. It is complete; the check simply did not finish, and says so.
+            if (item.Status == DownloadStatus.Verifying)
+            {
+                item.Status = DownloadStatus.Completed;
+                item.ChecksumResult = ChecksumResult.NotChecked;
+            }
+
             _items[item.Id] = item;
             RegisterService(item);
         }
@@ -216,6 +225,7 @@ public sealed class DownloadManager : IDownloadManager
                 SupportsResume = request.FileInfo.SupportsRangeRequests,
                 BypassCache = request.FileInfo.BypassCache,
                 RemoteVersion = request.FileInfo.Version,
+            ExpectedChecksum = request.ExpectedChecksum?.ToString(),
                 Status = DownloadStatus.Queued,
                 TempFolderPath = Path.Combine(_settingsService.Current.TempFolder, Guid.NewGuid().ToString("N")),
                 Credentials = request.Credentials?.Clone(),
@@ -330,6 +340,28 @@ public sealed class DownloadManager : IDownloadManager
         {
             _concurrencyGate.Release();
         }
+    }
+
+    public async Task<ChecksumResult> VerifyChecksumAsync(
+        Guid downloadId, ExpectedChecksum expected, IProgress<long>? progress, CancellationToken cancellationToken)
+    {
+        if (!_items.TryGetValue(downloadId, out var item) || !DownloadActions.CanVerifyChecksum(item))
+            return ChecksumResult.NotChecked;
+
+        var result = await FileChecksum.VerifyAsync(item.FullPath, expected, progress, cancellationToken).ConfigureAwait(false);
+
+        item.ExpectedChecksum = expected.ToString();
+        item.ChecksumResult = result;
+        PersistAll();
+
+        // Same status, fresh event — the row's description carries the result.
+        _dispatcher.Post(() => StatusChanged?.Invoke(this, new DownloadStatusChangedEventArgs
+        {
+            DownloadId = item.Id,
+            OldStatus = item.Status,
+            NewStatus = item.Status
+        }));
+        return result;
     }
 
     public bool ChangeAddress(Guid downloadId, AddressChange change) =>

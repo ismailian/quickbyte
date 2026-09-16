@@ -13,5 +13,12 @@ public enum DownloadStatus
     Merging,
     Completed,
     Failed,
-    Cancelled
+    Cancelled,
+
+    /// <summary>
+    /// The file is assembled and being checked against the checksum the user gave.
+    /// Appended rather than placed beside <see cref="Merging"/>: statuses are
+    /// persisted as numbers, and moving one would re-read every stored download.
+    /// </summary>
+    Verifying
 }

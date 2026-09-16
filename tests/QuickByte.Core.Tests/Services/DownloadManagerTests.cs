@@ -38,6 +38,67 @@ public sealed class DownloadManagerTests
     }
 
     [Fact]
+    public void A_download_interrupted_while_verifying_comes_back_complete_but_unchecked()
+    {
+        // The file is whole and in place and its chunks are gone: resuming it
+        // would fetch every byte again.
+        using var fixture = new Fixture();
+        fixture.Repository.Items.Add(new DownloadItem { Status = DownloadStatus.Verifying, ChecksumResult = ChecksumResult.Match });
+
+        fixture.Manager.LoadPersistedDownloads();
+
+        var item = fixture.Manager.Downloads.Single();
+        Assert.Equal(DownloadStatus.Completed, item.Status);
+        Assert.Equal(ChecksumResult.NotChecked, item.ChecksumResult);
+    }
+
+    [Fact]
+    public async Task A_checksum_given_when_adding_is_stored_with_the_download()
+    {
+        using var fixture = new Fixture();
+
+        var item = await fixture.Manager.AddDownloadAsync(new DownloadRequest("https://example.com/f.bin", fixture.Info, fixture.Downloads, "f.bin", 1)
+        {
+            StartImmediately = false,
+            ExpectedChecksum = new ExpectedChecksum(ChecksumAlgorithm.Sha256, "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81")
+        });
+
+        Assert.Equal("sha256:039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81", item.ExpectedChecksum);
+    }
+
+    [Fact]
+    public async Task A_checksum_given_after_the_fact_is_checked_kept_and_announced()
+    {
+        using var fixture = new Fixture();
+        string path = Path.Combine(fixture.Downloads, "done.bin");
+        File.WriteAllBytes(path, new byte[] { 1, 2, 3 });
+        var item = new DownloadItem { FileName = "done.bin", SaveFolder = fixture.Downloads, Status = DownloadStatus.Completed };
+        fixture.Repository.Items.Add(item);
+        fixture.Manager.LoadPersistedDownloads();
+        var announced = new List<Guid>();
+        fixture.Manager.StatusChanged += (_, e) => announced.Add(e.DownloadId);
+
+        var result = await fixture.Manager.VerifyChecksumAsync(
+            item.Id, FileChecksum.Parse("039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81")!, null, default);
+
+        Assert.Equal(ChecksumResult.Match, result);
+        Assert.Equal(ChecksumResult.Match, fixture.Repository.LastSaved.Single().ChecksumResult);
+        Assert.Contains(item.Id, announced);
+    }
+
+    [Fact]
+    public async Task A_download_with_no_file_to_check_is_not_checked()
+    {
+        using var fixture = new Fixture();
+        var item = await fixture.AddAsync(startImmediately: false);
+
+        var result = await fixture.Manager.VerifyChecksumAsync(
+            item.Id, FileChecksum.Parse("039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81")!, null, default);
+
+        Assert.Equal(ChecksumResult.NotChecked, result);
+    }
+
+    [Fact]
     public async Task Adding_a_download_sanitizes_the_name_the_server_gave()
     {
         using var fixture = new Fixture();

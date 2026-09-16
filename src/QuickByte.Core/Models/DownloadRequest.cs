@@ -30,4 +30,7 @@ public sealed record DownloadRequest(
     /// the item back promptly is a caller that is queueing it.
     /// </summary>
     public bool StartImmediately { get; init; } = true;
+
+    /// <summary>A checksum the finished file must match; see <see cref="Helpers.FileChecksum"/>.</summary>
+    public Helpers.ExpectedChecksum? ExpectedChecksum { get; init; }
 }

@@ -325,10 +325,53 @@ public sealed class DownloadService : IDownloadService
         if (_markFromInternet)
             MarkOfTheWeb.Apply(destination, Item.Url, ReferrerOf(Item));
 
+        if (FileChecksum.FromStored(Item.ExpectedChecksum) is { } expected
+            && !await VerifyAsync(destination, expected, token).ConfigureAwait(false))
+            return;
+
         Item.MergeProgressPercentage = 100;
         Item.DownloadedBytes = Item.TotalBytes;
         Item.CompletedAt = DateTimeOffset.Now;
         SetStatus(DownloadStatus.Completed);
+    }
+
+    /// <summary>
+    /// Checks the assembled file against the checksum it was added with. Progress
+    /// travels on the merge channel — the bar is full, and the text under it says
+    /// which step is running. A mismatch fails the download rather than completing
+    /// it: a file that is not the one published must not open from a "Download
+    /// complete" window, or trigger the power action queued behind it. The file is
+    /// left in place for the user to look at.
+    /// </summary>
+    /// <returns>Whether the download may be announced complete.</returns>
+    private async Task<bool> VerifyAsync(string destination, ExpectedChecksum expected, CancellationToken token)
+    {
+        Item.MergeProgressPercentage = 0;
+        SetStatus(DownloadStatus.Verifying);
+
+        long size = Math.Max(1, new FileInfo(destination).Length);
+        var progress = new InlineProgress(read =>
+        {
+            double percentage = Math.Clamp(read * 100.0 / size, 0, 100);
+            Item.MergeProgressPercentage = percentage;
+            ProgressChanged?.Invoke(this, new DownloadProgressEventArgs
+            {
+                DownloadId = Item.Id,
+                DownloadedBytes = Item.DownloadedBytes,
+                TotalBytes = Item.TotalBytes,
+                SpeedBytesPerSecond = 0,
+                EstimatedTimeRemaining = TimeSpan.Zero,
+                MergePercentage = percentage
+            });
+        });
+
+        Item.ChecksumResult = await FileChecksum.VerifyAsync(destination, expected, progress, token).ConfigureAwait(false);
+        if (Item.ChecksumResult == ChecksumResult.Match) return true;
+
+        SetStatus(DownloadStatus.Failed,
+            $"The finished file does not match its {FileChecksum.Name(expected.Algorithm)} checksum. " +
+            "It is damaged or not the file that was published.");
+        return false;
     }
 
     public void Pause()
