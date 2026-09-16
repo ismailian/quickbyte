@@ -159,8 +159,9 @@ to Core's events. This means the download engine could be reused headless
    pattern, exponential backoff), which deliberately does not retry a
    rejected password.
 6. **`IFileMerger`** (`FileMerger`) — once every connection finishes,
-   concatenates the ordered chunk files into the final destination file
-   and cleans up the temp folder.
+   assembles the ordered chunk files into the final destination file,
+   deleting each chunk as soon as its bytes are safely in the output. See
+   **Disk space and the merge** below.
 
 **Design patterns used:**
 - **Factory** — `IConnectionFactory` / `HttpConnectionFactory` decouple the
@@ -456,6 +457,42 @@ protonvpn.com's download endpoint is the live example: it advertises
 perfectly once the request reaches the origin. Which edge a given connection
 lands on varies, so the failure is intermittent — which is exactly the kind
 that gets reported as "it works in other download managers".
+
+### Disk space and the merge
+
+A download that runs out of disk used to find out at the end. The chunks filled
+the temp volume for hours, and then the merge copied every one of them into a
+new file before deleting any, so for the length of the merge a download needed
+twice its size. A 40 GB file on a drive with 50 GB free reached 100% and failed
+in the merge — the most expensive moment there is to run out.
+
+Two things changed:
+
+- **The space is checked before the first byte** (`DiskSpace.StillNeeded` /
+  `FindShortfall`): what is left to fetch into the temp folder, plus what the
+  merge will need at the destination, added together when both are on one
+  drive. A download that will not fit fails straight away with
+  *Not enough free space on C: — 38.2 GB is needed and 12.5 GB is free*, and
+  the merge checks again before it starts. A drive that cannot be measured (a
+  network share) does not stop anything. A disk that fills up anyway is no
+  longer retried by the connections — space does not come back in a backoff.
+- **The merge deletes as it goes.** On the same drive the chunks are appended
+  onto the first one, which is then renamed into place, so beyond the chunks
+  themselves the merge needs room for only the chunk being appended — and a
+  single-connection download's merge is a rename rather than a copy of the
+  whole file. On another drive the chunks are copied into the destination,
+  still deleting each as it lands.
+
+A merge that deletes its inputs cannot simply start again, and the app exiting
+half way through a big merge is ordinary. So before it changes anything the
+merger writes `merge.json` into the download's temp folder — the chunks, in
+order, with their lengths — and flushes each chunk to disk before deleting it.
+On the next start `DownloadService` sees the plan and finishes the merge
+directly: no probe (the link may have expired, and every byte is already
+local) and no connection pool (the chunk set is half folded together). The
+output's length says exactly how far it got; a half-appended chunk is cut off
+and appended again. A plan whose chunks are missing is dropped, and the next
+run downloads what is gone.
 
 ### A resumed file is the same file
 

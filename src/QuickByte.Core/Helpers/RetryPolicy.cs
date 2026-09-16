@@ -15,6 +15,10 @@ namespace QuickByte.Core.Helpers;
 /// towards a lockout. A file that changed on the server is no more fixable by
 /// this connection asking again: the chunks of every sibling belong to the old
 /// version too, and the decision belongs to the download as a whole.
+///
+/// A full disk ends it too, however it is reported. Space does not come back in
+/// the seconds a backoff waits, and every retry pulls bytes off the network only
+/// to fail writing them.
 /// </summary>
 public static class RetryPolicy
 {
@@ -46,5 +50,16 @@ public static class RetryPolicy
     private static bool IsTransient(Exception exception) =>
         exception is not OperationCanceledException
             and not AuthenticationRequiredException
-            and not RemoteFileChangedException;
+            and not RemoteFileChangedException
+            and not InsufficientDiskSpaceException
+        && !IsDiskFull(exception);
+
+    // ERROR_DISK_FULL and ERROR_HANDLE_DISK_FULL as HRESULTs. Space does not come
+    // back in the few seconds a backoff waits, and each retry re-reads bytes off
+    // the network only to fail writing them again.
+    private const int DiskFull = unchecked((int)0x80070070);
+    private const int HandleDiskFull = unchecked((int)0x80070027);
+
+    private static bool IsDiskFull(Exception exception) =>
+        exception is IOException { HResult: DiskFull or HandleDiskFull };
 }

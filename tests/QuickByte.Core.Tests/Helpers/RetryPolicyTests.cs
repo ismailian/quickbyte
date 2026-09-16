@@ -75,6 +75,34 @@ public sealed class RetryPolicyTests
         Assert.True(thrown.CredentialsWereSupplied);
     }
 
+    [Theory]
+    [InlineData(unchecked((int)0x80070070))] // ERROR_DISK_FULL
+    [InlineData(unchecked((int)0x80070027))] // ERROR_HANDLE_DISK_FULL
+    public async Task ExecuteAsync_does_not_retry_a_full_disk(int hresult)
+    {
+        // Space does not come back in the seconds a backoff waits, and each retry
+        // pulls the bytes off the network again only to fail writing them.
+        int calls = 0;
+
+        await Assert.ThrowsAsync<IOException>(() => RetryPolicy.ExecuteAsync<int>(
+            (_, _) => { calls++; throw new IOException("There is not enough space on the disk.", hresult); },
+            maxRetries: 5, NoDelay, onRetry: null, CancellationToken.None));
+
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_does_not_retry_a_changed_remote_file()
+    {
+        int calls = 0;
+
+        await Assert.ThrowsAsync<RemoteFileChangedException>(() => RetryPolicy.ExecuteAsync<int>(
+            (_, _) => { calls++; throw new RemoteFileChangedException("changed"); },
+            maxRetries: 5, NoDelay, onRetry: null, CancellationToken.None));
+
+        Assert.Equal(1, calls);
+    }
+
     [Fact]
     public async Task ExecuteAsync_does_not_retry_a_cancellation()
     {

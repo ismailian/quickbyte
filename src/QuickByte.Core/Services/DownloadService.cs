@@ -26,6 +26,7 @@ public sealed class DownloadService : IDownloadService
     private readonly ISettingsService _settingsService;
     private readonly Action<DownloadItem> _persist;
     private readonly bool _markFromInternet;
+    private readonly Func<string, long?> _availableBytes;
 
     private const int TempDeleteAttempts = 10;
     private const int TempDeleteRetryDelayMilliseconds = 250;
@@ -50,10 +51,12 @@ public sealed class DownloadService : IDownloadService
         IRemoteFileInfoProvider fileInfoProvider,
         ISettingsService settingsService,
         Action<DownloadItem> persist,
-        bool markFromInternet = true)
+        bool markFromInternet = true,
+        Func<string, long?>? availableBytes = null)
     {
         Item = item;
         _markFromInternet = markFromInternet;
+        _availableBytes = availableBytes ?? DiskSpace.AvailableBytes;
         _poolManager = poolManager;
         _fileMerger = fileMerger;
         _fileInfoProvider = fileInfoProvider;
@@ -80,6 +83,17 @@ public sealed class DownloadService : IDownloadService
 
             if (string.IsNullOrWhiteSpace(Item.TempFolderPath))
                 Item.TempFolderPath = Path.Combine(_settingsService.Current.TempFolder, Item.Id.ToString("N"));
+
+            // Interrupted in the merge — typically by the app exiting half way
+            // through a big one. Every byte is already on disk, so this needs no
+            // server: probing first would fail a finished download over a link
+            // that has since expired. And the pool must not run, because a merge
+            // in progress has already folded chunks into the first one.
+            if (_fileMerger.HasInterruptedMerge(Item.TempFolderPath))
+            {
+                await MergeAsync(Array.Empty<string>(), _cts.Token).ConfigureAwait(false);
+                return;
+            }
 
             if (_lastFileInfo is null)
             {
@@ -197,6 +211,7 @@ public sealed class DownloadService : IDownloadService
     /// </summary>
     private void DiscardProgress()
     {
+        _fileMerger.DiscardInterruptedMerge(Item.TempFolderPath, Item.FullPath);
         _poolManager.DiscardChunks(Item.TempFolderPath);
         Item.DownloadedBytes = 0;
         Item.MergeProgressPercentage = 0;
@@ -207,6 +222,7 @@ public sealed class DownloadService : IDownloadService
         // A pause that landed while the probe was answering has already set the
         // status; announcing Downloading over it would un-pause the row.
         token.ThrowIfCancellationRequested();
+        EnsureRoomToFinish(fileInfo);
         SetStatus(DownloadStatus.Downloading);
 
         bool completed = await _poolManager
@@ -227,6 +243,40 @@ public sealed class DownloadService : IDownloadService
             return;
         }
 
+        await MergeAsync(_poolManager.GetOrderedChunkPaths(), token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Refuses to start a transfer that cannot finish for want of disk. The chunks
+    /// fill the temp volume over hours and the merge then needs room at the
+    /// destination too, so a download that would run out used to find out at
+    /// 100%. The figures were known before the first byte.
+    /// </summary>
+    private void EnsureRoomToFinish(RemoteFileInfo fileInfo)
+    {
+        if (!fileInfo.HasKnownSize) return;
+
+        // The same count the pool will split with, so the merge estimate below
+        // matches the chunks that will actually exist.
+        int chunks = fileInfo.SupportsRangeRequests
+            ? (int)Math.Min(_settingsService.Current.ClampConnections(Item.ConnectionsCount), fileInfo.ContentLength)
+            : 1;
+        long largestChunk = (fileInfo.ContentLength + chunks - 1) / chunks;
+
+        var needs = DiskSpace.StillNeeded(
+            Item.TempFolderPath, Item.SaveFolder, fileInfo.ContentLength, Item.DownloadedBytes, largestChunk, chunks);
+
+        if (DiskSpace.FindShortfall(needs, _availableBytes) is { } shortfall)
+            throw new InsufficientDiskSpaceException(shortfall);
+    }
+
+    /// <summary>
+    /// Assembles the finished file — or finishes assembling it, when
+    /// <paramref name="chunkPaths"/> is empty and the merger holds an interrupted
+    /// merge — then marks it and announces the download complete.
+    /// </summary>
+    private async Task MergeAsync(IReadOnlyList<string> chunkPaths, CancellationToken token)
+    {
         // Every byte is already on disk before the merge starts, so the overall
         // progress is pinned at 100% for the whole merge. Merge progress travels
         // on its own channel (MergePercentage) — reporting it as DownloadedBytes
@@ -236,7 +286,6 @@ public sealed class DownloadService : IDownloadService
         SetStatus(DownloadStatus.Merging);
 
         string destination = Item.FullPath;
-        var chunkPaths = _poolManager.GetOrderedChunkPaths();
 
         // Deliberately not Progress<T>. That posts to the captured
         // SynchronizationContext and silently falls back to the thread pool when
@@ -262,9 +311,12 @@ public sealed class DownloadService : IDownloadService
             });
         });
 
-        await _fileMerger.MergeAsync(chunkPaths, destination, _settingsService.Current.ClampBufferSize(), mergeProgress, token)
+        await _fileMerger.MergeAsync(
+                Item.TempFolderPath, chunkPaths, destination, _settingsService.Current.ClampBufferSize(), mergeProgress, token)
             .ConfigureAwait(false);
 
+        // The merge deletes each chunk as it lands; this collects any a scanner
+        // held open at the time, and then the folder itself.
         _fileMerger.CleanupChunks(chunkPaths, Item.TempFolderPath);
 
         // Before Completed is announced: the completion window offers to open
@@ -304,6 +356,10 @@ public sealed class DownloadService : IDownloadService
         if (Item.Status == DownloadStatus.Completed) return;
 
         SetStatus(DownloadStatus.Cancelled);
+
+        // A merge interrupted on another volume was writing into the user's own
+        // folder; discarding the download discards that half-file too.
+        _fileMerger.DiscardInterruptedMerge(Item.TempFolderPath, Item.FullPath);
         ScheduleTempFolderDeletion();
     }
 

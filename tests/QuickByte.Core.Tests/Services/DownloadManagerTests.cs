@@ -348,6 +348,47 @@ public sealed class DownloadManagerTests
     }
 
     [Fact]
+    public async Task A_merge_the_app_exited_in_the_middle_of_finishes_on_the_next_launch()
+    {
+        // The chunks of an 8-way download, half of them already folded into the
+        // first and deleted, then a restart. The next launch must neither re-run
+        // the pool over that half-merged set nor produce anything but the file.
+        using var fixture = new Fixture();
+        byte[] content = Enumerable.Range(0, 8000).Select(i => (byte)(i % 251)).ToArray();
+        string temp = Path.Combine(fixture.Temp, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temp);
+        File.WriteAllBytes(Path.Combine(temp, "part0.tmp"), content[..5000]);
+        for (int i = 5; i < 8; i++) File.WriteAllBytes(Path.Combine(temp, $"part{i}.tmp"), content[(i * 1000)..((i + 1) * 1000)]);
+        File.WriteAllBytes(Path.Combine(temp, "part5.tmp"), content[5000..6000]);
+        FileMerger.WritePlan(temp, new FileMerger.Plan
+        {
+            Destination = Path.Combine(fixture.Downloads, "restarted.bin"),
+            InPlace = true,
+            Chunks = Enumerable.Range(0, 8).Select(i => new FileMerger.PlanChunk($"part{i}.tmp", 1000)).ToList()
+        });
+
+        var item = new DownloadItem
+        {
+            Url = "https://example.com/file.bin",
+            FileName = "restarted.bin",
+            SaveFolder = fixture.Downloads,
+            TempFolderPath = temp,
+            TotalBytes = content.Length,
+            DownloadedBytes = content.Length,
+            Status = DownloadStatus.Merging
+        };
+        fixture.Repository.Items.Add(item);
+        fixture.Manager.LoadPersistedDownloads();
+
+        await fixture.Manager.ResumeAsync(item.Id);
+
+        Assert.Equal(DownloadStatus.Completed, item.Status);
+        Assert.Equal(content, File.ReadAllBytes(item.FullPath));
+        Assert.Equal(0, fixture.Factory.Created);
+        Assert.False(Directory.Exists(temp));
+    }
+
+    [Fact]
     public async Task A_file_replaced_on_the_server_between_attempts_is_not_merged_with_the_old_one()
     {
         // Half of version 1 on disk, then the publisher replaces the file. The

@@ -383,6 +383,78 @@ public sealed class DownloadServiceTests
         Assert.Equal(DownloadStatus.Paused, fixture.Item.Status);
     }
 
+    // ------------------------------------------------------------ disk space --
+
+    [Fact]
+    public async Task A_download_that_will_not_fit_fails_before_its_first_byte_and_says_where()
+    {
+        // It used to fill the drive for hours and die in the merge at 100%.
+        using var fixture = new Fixture(availableBytes: _ => 999);
+        fixture.Info.ContentLength = 1000;
+
+        await fixture.Service.StartAsync();
+
+        Assert.Equal(DownloadStatus.Failed, fixture.Item.Status);
+        Assert.Contains("Not enough free space", fixture.Item.ErrorMessage);
+        Assert.Equal(0, fixture.Pool.Runs);
+    }
+
+    [Fact]
+    public async Task What_is_already_downloaded_does_not_need_room_again()
+    {
+        using var fixture = new Fixture(availableBytes: _ => 700);
+        fixture.Info.ContentLength = 1000;
+        fixture.Item.TotalBytes = 1000;
+        fixture.Item.DownloadedBytes = 400;
+
+        await fixture.Service.StartAsync();
+
+        Assert.Equal(DownloadStatus.Completed, fixture.Item.Status);
+    }
+
+    [Fact]
+    public async Task A_drive_that_cannot_be_measured_is_not_a_reason_to_refuse()
+    {
+        using var fixture = new Fixture(availableBytes: _ => null);
+
+        await fixture.Service.StartAsync();
+
+        Assert.Equal(DownloadStatus.Completed, fixture.Item.Status);
+    }
+
+    // ---------------------------------------------------- an interrupted merge --
+
+    [Fact]
+    public async Task A_merge_interrupted_by_a_restart_finishes_without_asking_the_server()
+    {
+        // Every byte is already on disk. Probing first would fail a finished
+        // download over a link that has since expired, and running the pool
+        // would misread chunks the merge has already folded together.
+        using var fixture = new Fixture();
+        fixture.Item.Status = DownloadStatus.Paused;
+        fixture.Merger.Interrupted = true;
+        fixture.Provider.Throw = new HttpRequestException("403 (Forbidden)");
+
+        await fixture.Service.StartAsync();
+
+        Assert.Equal(DownloadStatus.Completed, fixture.Item.Status);
+        Assert.Equal(0, fixture.Provider.Probes);
+        Assert.Equal(0, fixture.Pool.Runs);
+        Assert.Empty(Assert.Single(fixture.Merger.MergedChunkLists));
+    }
+
+    [Fact]
+    public void Stopping_a_download_discards_an_interrupted_merge_with_it()
+    {
+        using var fixture = new Fixture();
+        fixture.Item.Status = DownloadStatus.Paused;
+        fixture.Merger.Interrupted = true;
+
+        fixture.Service.Stop();
+
+        Assert.Equal(1, fixture.Merger.Discards);
+    }
+
     // --------------------------------------------------- the mark of the web --
 
     [Fact]
@@ -559,7 +631,7 @@ public sealed class DownloadServiceTests
     {
         private readonly TempFolder _folder = new();
 
-        public Fixture(bool markFromInternet = true)
+        public Fixture(bool markFromInternet = true, Func<string, long?>? availableBytes = null)
         {
             Item = new DownloadItem
             {
@@ -578,7 +650,8 @@ public sealed class DownloadServiceTests
             Pool = new FakePool();
             Merger = new FakeMerger();
 
-            Service = new DownloadService(Item, Pool, Merger, Provider, Settings, _ => Persisted++, markFromInternet);
+            Service = new DownloadService(
+                Item, Pool, Merger, Provider, Settings, _ => Persisted++, markFromInternet, availableBytes ?? (_ => null));
             Service.StatusChanged += (_, e) => StatusHistory.Add(e.NewStatus);
         }
 
@@ -707,11 +780,27 @@ public sealed class DownloadServiceTests
         /// <summary>Leaves a real file at the destination, as a merge would.</summary>
         public bool WriteDestination { get; set; }
 
+        /// <summary>Pretends a merge was interrupted in the temp folder, as a restart mid-merge leaves it.</summary>
+        public bool Interrupted { get; set; }
+
+        public List<IReadOnlyList<string>> MergedChunkLists { get; } = new();
+        public int Discards { get; private set; }
+
+        public bool HasInterruptedMerge(string tempFolder) => Interrupted;
+
+        public void DiscardInterruptedMerge(string tempFolder, string destinationFilePath)
+        {
+            Interrupted = false;
+            Discards++;
+        }
+
         public Task MergeAsync(
-            IReadOnlyList<string> orderedChunkPaths, string destinationFilePath, int bufferSize,
+            string tempFolder, IReadOnlyList<string> orderedChunkPaths, string destinationFilePath, int bufferSize,
             IProgress<long>? bytesMergedProgress, CancellationToken cancellationToken)
         {
             Merged = true;
+            Interrupted = false;
+            MergedChunkLists.Add(orderedChunkPaths);
             if (WriteDestination) File.WriteAllBytes(destinationFilePath, new byte[] { 1, 2, 3 });
             foreach (long merged in ReportDuringMerge) bytesMergedProgress?.Report(merged);
             return Task.CompletedTask;
