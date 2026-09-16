@@ -128,8 +128,11 @@ to Core's events. This means the download engine could be reused headless
    and asks `SIZE`, `MDTM` and `FEAT`. A `401` or an FTP `530` is reported as
    `AuthenticationRequiredException` rather than a generic failure, which is
    what brings up the sign-in dialog instead of an error the user can only
-   read. The probe is what settles segment support, and it is never skipped —
-   see **Segment support is proven, not read off a header** below.
+   read. For HTTP only the ranged GET's `401` counts: HEAD can be routed
+   somewhere GET is not, and github.com sends a signed-in browser's HEAD to a
+   host that refuses everyone. The probe is what settles segment support, and
+   it is never skipped — see **Segment support is proven, not read off a
+   header** below.
 2. **`IDownloadManager`** (`DownloadManager`) — the facade/registry every
    window talks to. Owns every `IDownloadService`, persists the download
    list to JSON, throttles concurrent downloads with a `SemaphoreSlim`, and

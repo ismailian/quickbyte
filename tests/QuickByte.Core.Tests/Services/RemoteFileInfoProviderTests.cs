@@ -222,6 +222,46 @@ public sealed class RemoteFileInfoProviderTests
             () => new RemoteFileInfoProvider(stub.Client).GetFileInfoAsync(Url));
     }
 
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.ProxyAuthenticationRequired)]
+    public async Task A_challenge_to_head_alone_is_not_a_credentials_prompt(HttpStatusCode challenge)
+    {
+        // github.com, for anyone signed in to it. A browser hand-off carries the
+        // logged_in=yes cookie, and GitHub answers a HEAD bearing it with a
+        // redirect to its legacy asset host, which refuses the request with a
+        // 401. The same link as a GET goes to the current asset host and
+        // answers 206. Browsers never send HEAD, so the link works in Chrome
+        // and QuickByte asked for a password the file does not have.
+        using var stub = new StubServer(
+            _ => new HttpResponseMessage(challenge),
+            PartialProbe());
+
+        var info = await new RemoteFileInfoProvider(stub.Client).GetFileInfoAsync(Url);
+
+        Assert.False(info.RequiresAuthentication);
+        Assert.True(info.SupportsRangeRequests);
+        Assert.Equal(Size, info.ContentLength);
+        Assert.Equal(new[] { "HEAD", "GET" }, stub.Requests.Select(r => r.Method));
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.ProxyAuthenticationRequired)]
+    public async Task A_challenge_the_probe_repeats_is_still_a_credentials_prompt(HttpStatusCode challenge)
+    {
+        // The other half: a server that really wants a login refuses the GET
+        // too, and the prompt has to survive the HEAD no longer deciding it.
+        using var stub = new StubServer(
+            _ => new HttpResponseMessage(challenge),
+            _ => new HttpResponseMessage(challenge));
+
+        var thrown = await Assert.ThrowsAsync<AuthenticationRequiredException>(
+            () => new RemoteFileInfoProvider(stub.Client).GetFileInfoAsync(Url));
+
+        Assert.False(thrown.CredentialsWereSupplied);
+    }
+
     // ---------------------------------------------------------- what it reads --
 
     [Fact]

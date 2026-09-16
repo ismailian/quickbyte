@@ -17,7 +17,8 @@ namespace QuickByte.Core.Services;
 /// A 401 is reported as <see cref="AuthenticationRequiredException"/> rather
 /// than a generic failure: it is the one error the user can actually do
 /// something about, and the Add Download dialog turns it into a credentials
-/// prompt instead of a dead end.
+/// prompt instead of a dead end. Only a 401 to the ranged GET counts — a HEAD
+/// can be routed somewhere the GET is not, and github.com does exactly that.
 /// </summary>
 /// <remarks>
 /// <para><b>Why the probe is not optional.</b> HEAD used to be allowed to
@@ -90,8 +91,15 @@ public sealed class RemoteFileInfoProvider : IRemoteFileInfoProvider
             using var headResponse = await _client.SendAsync(headRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
                 .ConfigureAwait(false);
 
-            ThrowIfChallenged(headResponse, info, options);
-
+            // A 401 here is deliberately not a credentials prompt. HEAD is not
+            // always routed where GET is: github.com sends a HEAD from a
+            // signed-in browser (anything carrying logged_in=yes) to a legacy
+            // asset host that refuses everyone with a 401, while the same GET
+            // goes to one that serves the file. Browsers never send HEAD, so
+            // the link works there. The ranged GET below is the request the
+            // download will actually make, so it is the one whose challenge
+            // counts — a server that really wants a login refuses it too, and
+            // the prompt comes from there a round trip later.
             if (headResponse.IsSuccessStatusCode)
             {
                 serverFileName = Absorb(info, headResponse);
@@ -100,13 +108,6 @@ public sealed class RemoteFileInfoProvider : IRemoteFileInfoProvider
                 // how many connections fetch it. That is what the probe is for.
                 headAnsweredEverything = info.HasKnownSize && serverFileName is not null;
             }
-        }
-        catch (AuthenticationRequiredException)
-        {
-            // The one HEAD failure worth surfacing: a ranged GET would only be
-            // refused the same way, and re-probing costs the user a second wait
-            // before the same prompt.
-            throw;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
