@@ -25,6 +25,7 @@ public sealed class DownloadManager : IDownloadManager
     private readonly IConnectionFactory _connectionFactory;
     private readonly IFileMerger _fileMerger;
     private readonly IDispatcher _dispatcher;
+    private readonly bool _markDownloadsFromInternet;
 
     private readonly ConcurrentDictionary<Guid, IDownloadService> _services = new();
     private readonly ConcurrentDictionary<Guid, DownloadItem> _items = new();
@@ -57,8 +58,14 @@ public sealed class DownloadManager : IDownloadManager
         IRemoteFileInfoProvider fileInfoProvider,
         IConnectionFactory connectionFactory,
         IFileMerger fileMerger,
-        IDispatcher dispatcher)
+        IDispatcher dispatcher,
+        bool markDownloadsFromInternet = true)
     {
+        // Whether finished files are tagged with the Mark of the Web — see
+        // MarkOfTheWeb. A parameter rather than a setting: the only reason to
+        // turn it off is the Windows policy that turns it off for the browsers,
+        // and reading that is the UI project's business.
+        _markDownloadsFromInternet = markDownloadsFromInternet;
         _repository = repository;
         _settingsService = settingsService;
         _fileInfoProvider = fileInfoProvider;
@@ -224,7 +231,8 @@ public sealed class DownloadManager : IDownloadManager
 
         var poolManager = new ConnectionPoolManager(
             _connectionFactory, new CompositeBandwidthLimiter(speedLimit, queueSpeedLimit, _globalSpeedLimit));
-        var service = new DownloadService(item, poolManager, _fileMerger, _fileInfoProvider, _settingsService, PersistItem);
+        var service = new DownloadService(
+            item, poolManager, _fileMerger, _fileInfoProvider, _settingsService, PersistItem, _markDownloadsFromInternet);
 
         service.ProgressChanged += (_, e) => _dispatcher.Post(() => ProgressChanged?.Invoke(this, e));
         service.StatusChanged += (_, e) => _dispatcher.Post(() => StatusChanged?.Invoke(this, e));

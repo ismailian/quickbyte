@@ -1,6 +1,7 @@
 using QuickByte.Core.Enums;
 using QuickByte.Core.Events;
 using QuickByte.Core.Exceptions;
+using QuickByte.Core.Helpers;
 using QuickByte.Core.Interfaces;
 using QuickByte.Core.Models;
 using QuickByte.Core.Services;
@@ -382,6 +383,37 @@ public sealed class DownloadServiceTests
         Assert.Equal(DownloadStatus.Paused, fixture.Item.Status);
     }
 
+    // --------------------------------------------------- the mark of the web --
+
+    [Fact]
+    public async Task A_finished_file_is_marked_as_coming_from_the_internet_and_the_page_it_came_from()
+    {
+        // A download handed over from Chrome used to arrive with fewer
+        // protections than letting Chrome save it: no Zone.Identifier, so no
+        // SmartScreen check and no Protected View.
+        using var fixture = new Fixture();
+        fixture.Merger.WriteDestination = true;
+        fixture.Item.Headers = new Dictionary<string, string> { ["referer"] = "https://example.com/downloads" };
+
+        await fixture.Service.StartAsync();
+
+        string stream = File.ReadAllText($"{fixture.Item.FullPath}:{MarkOfTheWeb.StreamName}");
+        Assert.Contains("ZoneId=3", stream);
+        Assert.Contains("HostUrl=https://example.com/file.bin", stream);
+        Assert.Contains("ReferrerUrl=https://example.com/downloads", stream);
+    }
+
+    [Fact]
+    public async Task No_mark_is_written_where_policy_says_to_keep_no_zone_information()
+    {
+        using var fixture = new Fixture(markFromInternet: false);
+        fixture.Merger.WriteDestination = true;
+
+        await fixture.Service.StartAsync();
+
+        Assert.Throws<FileNotFoundException>(() => File.ReadAllText($"{fixture.Item.FullPath}:{MarkOfTheWeb.StreamName}"));
+    }
+
     // ------------------------------------------------------ a new address --
 
     [Fact]
@@ -527,7 +559,7 @@ public sealed class DownloadServiceTests
     {
         private readonly TempFolder _folder = new();
 
-        public Fixture()
+        public Fixture(bool markFromInternet = true)
         {
             Item = new DownloadItem
             {
@@ -546,7 +578,7 @@ public sealed class DownloadServiceTests
             Pool = new FakePool();
             Merger = new FakeMerger();
 
-            Service = new DownloadService(Item, Pool, Merger, Provider, Settings, _ => Persisted++);
+            Service = new DownloadService(Item, Pool, Merger, Provider, Settings, _ => Persisted++, markFromInternet);
             Service.StatusChanged += (_, e) => StatusHistory.Add(e.NewStatus);
         }
 
@@ -672,11 +704,15 @@ public sealed class DownloadServiceTests
         public bool Merged { get; private set; }
         public long[] ReportDuringMerge { get; set; } = Array.Empty<long>();
 
+        /// <summary>Leaves a real file at the destination, as a merge would.</summary>
+        public bool WriteDestination { get; set; }
+
         public Task MergeAsync(
             IReadOnlyList<string> orderedChunkPaths, string destinationFilePath, int bufferSize,
             IProgress<long>? bytesMergedProgress, CancellationToken cancellationToken)
         {
             Merged = true;
+            if (WriteDestination) File.WriteAllBytes(destinationFilePath, new byte[] { 1, 2, 3 });
             foreach (long merged in ReportDuringMerge) bytesMergedProgress?.Report(merged);
             return Task.CompletedTask;
         }

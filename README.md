@@ -502,6 +502,31 @@ Weak ETags are never sent in `If-Range` (RFC 9110 forbids it), and a captured
 browser header that is any kind of conditional (`If-None-Match`, `If-Range`, …)
 is dropped, because a stale one would turn the probe into a `304`.
 
+### Finished files are marked as coming from the internet
+
+Every browser tags a download with the `Zone.Identifier` alternate data stream —
+the Mark of the Web — and a good deal of Windows security reads it: SmartScreen
+checks an executable's reputation before it runs, Office opens a document in
+Protected View, PowerShell refuses an unsigned script. The browser extension
+hands downloads over from Chrome, so before QuickByte wrote the mark, a click in
+Chrome produced a file with *fewer* protections than letting Chrome save it.
+
+`MarkOfTheWeb` writes the same stream Chromium does once the merge finishes:
+`ZoneId=3`, the referring page and the file's address. Both addresses are
+rebuilt from a parsed `Uri` with any user name and password removed, only
+http(s)/ftp(s) survive, and nothing that could start a new line gets in — the
+referrer is a header the extension was sent, and the stream is parsed line by
+line. A volume without alternate streams (FAT32, exFAT, many shares) simply goes
+without; it never fails the download.
+
+The Attachment Manager policy *Do not preserve zone information in file
+attachments* (`SaveZoneInformation = 1`, machine policy first) turns it off, as
+it does for the browsers. `ZoneInformationPolicy` in the UI project reads it,
+because the registry is the UI's business, and hands `DownloadManager` the
+answer. The self-updater's installer is not marked: it is verified against the
+manifest's SHA-256 instead, and a mark would put a SmartScreen prompt in front
+of every update.
+
 ### Refreshing a download's address
 
 The link is often the only thing wrong with a failed download. Signed URLs —

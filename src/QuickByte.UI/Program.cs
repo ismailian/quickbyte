@@ -58,8 +58,12 @@ internal static class Program
             SynchronizationContext.SetSynchronizationContext(new System.Windows.Forms.WindowsFormsSynchronizationContext());
             var dispatcher = new AppDispatcher(SynchronizationContext.Current!);
 
+            // Finished files are marked as coming from the internet, as the
+            // browsers mark theirs, unless Windows policy says to keep no zone
+            // information — in which case it says so for QuickByte too.
             IDownloadManager downloadManager = new DownloadManager(
-                repository, settingsService, fileInfoProvider, connectionFactory, fileMerger, dispatcher);
+                repository, settingsService, fileInfoProvider, connectionFactory, fileMerger, dispatcher,
+                markDownloadsFromInternet: ZoneInformationPolicy.PreservesZoneInformation);
 
             downloadManager.LoadPersistedDownloads();
 

@@ -25,6 +25,7 @@ public sealed class DownloadService : IDownloadService
     private readonly IRemoteFileInfoProvider _fileInfoProvider;
     private readonly ISettingsService _settingsService;
     private readonly Action<DownloadItem> _persist;
+    private readonly bool _markFromInternet;
 
     private const int TempDeleteAttempts = 10;
     private const int TempDeleteRetryDelayMilliseconds = 250;
@@ -48,9 +49,11 @@ public sealed class DownloadService : IDownloadService
         IFileMerger fileMerger,
         IRemoteFileInfoProvider fileInfoProvider,
         ISettingsService settingsService,
-        Action<DownloadItem> persist)
+        Action<DownloadItem> persist,
+        bool markFromInternet = true)
     {
         Item = item;
+        _markFromInternet = markFromInternet;
         _poolManager = poolManager;
         _fileMerger = fileMerger;
         _fileInfoProvider = fileInfoProvider;
@@ -264,6 +267,12 @@ public sealed class DownloadService : IDownloadService
 
         _fileMerger.CleanupChunks(chunkPaths, Item.TempFolderPath);
 
+        // Before Completed is announced: the completion window offers to open
+        // the file, and it has to open as a download from the internet, not as
+        // a file SmartScreen and Protected View have never heard of.
+        if (_markFromInternet)
+            MarkOfTheWeb.Apply(destination, Item.Url, ReferrerOf(Item));
+
         Item.MergeProgressPercentage = 100;
         Item.DownloadedBytes = Item.TotalBytes;
         Item.CompletedAt = DateTimeOffset.Now;
@@ -375,6 +384,18 @@ public sealed class DownloadService : IDownloadService
             // collects it, which is why that sweep treats a cancelled item's
             // TempFolderPath as unclaimed rather than in use.
         });
+    }
+
+    /// <summary>The page the download was captured from, if the browser said.</summary>
+    private static string? ReferrerOf(DownloadItem item)
+    {
+        // Looked up by hand: a list loaded from downloads.json comes back with
+        // the default, case-sensitive comparer.
+        foreach (var (name, value) in item.Headers)
+        {
+            if (name.Equals("Referer", StringComparison.OrdinalIgnoreCase)) return value;
+        }
+        return null;
     }
 
     private void OnPoolProgressChanged(object? sender, DownloadProgressEventArgs e)
