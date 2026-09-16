@@ -23,7 +23,19 @@ public interface IConnectionPoolManager
     /// completes once every connection has finished, failed permanently, or
     /// the token is cancelled (pause/stop).
     /// </summary>
+    /// <exception cref="Exceptions.RemoteFileChangedException">
+    /// A connection found the file on the server is no longer the version the
+    /// chunks came from. Every connection has been stopped by the time this is
+    /// thrown; the chunks are left where they are for the caller to judge.
+    /// </exception>
     Task<bool> RunAsync(DownloadItem item, RemoteFileInfo fileInfo, DownloadSettings settings, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Deletes every chunk file in <paramref name="tempFolder"/>, so the next run
+    /// starts the file from zero. The pool owns this because it owns the chunk
+    /// naming; anything else in the folder is left alone.
+    /// </summary>
+    void DiscardChunks(string tempFolder);
 
     IReadOnlyList<string> GetOrderedChunkPaths();
 }

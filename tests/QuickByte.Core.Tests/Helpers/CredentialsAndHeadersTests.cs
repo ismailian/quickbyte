@@ -263,6 +263,74 @@ public sealed class HttpRequestDecoratorTests
         Assert.True(request.Headers.Contains("Cookie"));
     }
 
+    // --------------------------------------------------- versions and If-Range --
+
+    [Theory]
+    [InlineData("If-Range")]
+    [InlineData("If-None-Match")]
+    [InlineData("If-Modified-Since")]
+    [InlineData("If-Match")]
+    [InlineData("If-Unmodified-Since")]
+    public void A_captured_conditional_header_is_never_sent(string name)
+    {
+        // A captured If-None-Match turns the probe into a 304 with no size, and a
+        // stale If-Range would decide which version of the file counts.
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://example.com/f.bin");
+
+        HttpRequestDecorator.Apply(request, new RequestOptions
+        {
+            Headers = new Dictionary<string, string> { [name] = "\"stale\"", ["Cookie"] = "session=abc" }
+        });
+
+        Assert.False(request.Headers.Contains(name));
+        Assert.True(request.Headers.Contains("Cookie"));
+    }
+
+    [Fact]
+    public void IfRangeFor_prefers_a_strong_etag()
+    {
+        var condition = HttpRequestDecorator.IfRangeFor(new RemoteFileVersion
+        {
+            ETag = "\"v2\"",
+            LastModified = new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero)
+        });
+
+        Assert.Equal("\"v2\"", condition!.EntityTag!.Tag);
+        Assert.Null(condition.Date);
+    }
+
+    [Fact]
+    public void IfRangeFor_falls_back_to_the_date_when_there_is_no_etag()
+    {
+        var date = new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero);
+
+        var condition = HttpRequestDecorator.IfRangeFor(new RemoteFileVersion { LastModified = date });
+
+        Assert.Equal(date, condition!.Date);
+    }
+
+    [Fact]
+    public void IfRangeFor_never_sends_a_weak_etag_or_the_date_beside_it()
+    {
+        // RFC 9110: a weak tag in If-Range must be treated as a mismatch, so the
+        // server sends the whole file every time — and the date may not be used
+        // when the client holds a tag at all.
+        var condition = HttpRequestDecorator.IfRangeFor(new RemoteFileVersion
+        {
+            ETag = "W/\"v2\"",
+            LastModified = new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero)
+        });
+
+        Assert.Null(condition);
+    }
+
+    [Fact]
+    public void IfRangeFor_asks_nothing_without_a_validator()
+    {
+        Assert.Null(HttpRequestDecorator.IfRangeFor(null));
+        Assert.Null(HttpRequestDecorator.IfRangeFor(new RemoteFileVersion { Host = "example.com" }));
+    }
+
     [Fact]
     public void A_captured_cache_header_is_still_sent_when_nothing_is_being_bypassed()
     {

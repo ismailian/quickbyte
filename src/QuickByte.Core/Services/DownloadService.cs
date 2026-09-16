@@ -1,6 +1,8 @@
 using System.Threading;
 using QuickByte.Core.Enums;
 using QuickByte.Core.Events;
+using QuickByte.Core.Exceptions;
+using QuickByte.Core.Helpers;
 using QuickByte.Core.Interfaces;
 using QuickByte.Core.Models;
 
@@ -26,6 +28,9 @@ public sealed class DownloadService : IDownloadService
 
     private const int TempDeleteAttempts = 10;
     private const int TempDeleteRetryDelayMilliseconds = 250;
+
+    /// <summary>How many times one run starts over for a file that changed on the server.</summary>
+    private const int MaxServerChangeRestarts = 3;
 
     private CancellationTokenSource? _cts;
     private RemoteFileInfo? _lastFileInfo;
@@ -70,24 +75,27 @@ public sealed class DownloadService : IDownloadService
             _cts = new CancellationTokenSource();
             SetStatus(DownloadStatus.Connecting);
 
-            _lastFileInfo ??= await _fileInfoProvider
-                .GetFileInfoAsync(Item.Url, Item.ToRequestOptions(), _cts.Token)
-                .ConfigureAwait(false);
-            Item.TotalBytes = _lastFileInfo.HasKnownSize ? _lastFileInfo.ContentLength : Item.TotalBytes;
-            Item.SupportsResume = _lastFileInfo.SupportsRangeRequests;
-            Item.ContentType = _lastFileInfo.ContentType;
-
-            // Taken from the fresh probe, before the pool builds its
-            // connections: a Retry re-resolves the file, and if a cache in front
-            // of the server is what makes ranges work, the connections have to
-            // learn that from this run rather than from whatever the item was
-            // added with. The probe seeds the flag from the options it was
-            // handed, so an item that already knew keeps knowing.
-            Item.BypassCache = _lastFileInfo.BypassCache;
             if (string.IsNullOrWhiteSpace(Item.TempFolderPath))
                 Item.TempFolderPath = Path.Combine(_settingsService.Current.TempFolder, Item.Id.ToString("N"));
 
-            await RunDownloadCycleAsync(_lastFileInfo, _cts.Token).ConfigureAwait(false);
+            if (_lastFileInfo is null)
+            {
+                _lastFileInfo = await ProbeAsync(_cts.Token).ConfigureAwait(false);
+
+                // Every fresh probe is held against the version the chunks came
+                // from. For a download that never ran there are no chunks and it
+                // costs nothing; for a resume after a restart, or a Retry, it is
+                // the moment the server has had to replace the file.
+                if (FileVersionCheck.Compare(Item.TotalBytes, Item.RemoteVersion,
+                        _lastFileInfo.ContentLength, _lastFileInfo.Version) == FileVersionVerdict.Changed)
+                {
+                    DiscardProgress();
+                }
+            }
+
+            AdoptFileInfo(_lastFileInfo);
+
+            await RunUntilTheFileHoldsStillAsync(_cts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -103,8 +111,99 @@ public sealed class DownloadService : IDownloadService
         }
     }
 
+    private Task<RemoteFileInfo> ProbeAsync(CancellationToken token) =>
+        _fileInfoProvider.GetFileInfoAsync(Item.Url, Item.ToRequestOptions(), token);
+
+    private void AdoptFileInfo(RemoteFileInfo info)
+    {
+        Item.TotalBytes = info.HasKnownSize ? info.ContentLength : Item.TotalBytes;
+        Item.SupportsResume = info.SupportsRangeRequests;
+        Item.ContentType = info.ContentType;
+
+        // Taken from the fresh probe, before the pool builds its
+        // connections: a Retry re-resolves the file, and if a cache in front
+        // of the server is what makes ranges work, the connections have to
+        // learn that from this run rather than from whatever the item was
+        // added with. The probe seeds the flag from the options it was
+        // handed, so an item that already knew keeps knowing.
+        Item.BypassCache = info.BypassCache;
+
+        // Whatever the server describes now is the version this run's chunks
+        // belong to: either it agreed with the old one, or the old chunks are
+        // already gone.
+        Item.RemoteVersion = info.Version;
+    }
+
+    /// <summary>
+    /// Runs the download, starting over if a connection reports that the file on
+    /// the server is no longer the one the chunks came from.
+    ///
+    /// The report is checked before anything is thrown away. A connection's
+    /// <c>If-Range</c> getting a 200 is a strong signal, but a server that does not
+    /// evaluate the condition, or whose edges mint ETags of their own, sends the
+    /// same answer for a file that never changed — and discarding a download on
+    /// its word would cost hours for nothing. So the file is probed again: if the
+    /// probe describes a different file, the chunks go; if it describes the same
+    /// one, it is the condition that cannot be trusted, and the connections stop
+    /// sending it.
+    /// </summary>
+    private async Task RunUntilTheFileHoldsStillAsync(CancellationToken token)
+    {
+        int restarts = 0;
+        while (true)
+        {
+            try
+            {
+                await RunDownloadCycleAsync(_lastFileInfo!, token).ConfigureAwait(false);
+                return;
+            }
+            catch (RemoteFileChangedException)
+            {
+                token.ThrowIfCancellationRequested();
+                SetStatus(DownloadStatus.Connecting);
+
+                var fresh = await ProbeAsync(token).ConfigureAwait(false);
+                bool changed = FileVersionCheck.Compare(
+                    Item.TotalBytes, Item.RemoteVersion, fresh.ContentLength, fresh.Version) == FileVersionVerdict.Changed;
+
+                if (!changed)
+                {
+                    Item.IfRangeUnsupported = true;
+                }
+                else if (++restarts > MaxServerChangeRestarts)
+                {
+                    // A file regenerated on every request cannot be downloaded in
+                    // pieces at all; saying so beats restarting forever.
+                    throw new IOException("The file on the server kept changing while it was being downloaded.");
+                }
+                else
+                {
+                    DiscardProgress();
+                }
+
+                _lastFileInfo = fresh;
+                AdoptFileInfo(fresh);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Throws away every chunk, so the next run starts the file from zero. Used
+    /// only once the server is known to hold a different version: bytes from two
+    /// versions of a file merge into a file that is neither.
+    /// </summary>
+    private void DiscardProgress()
+    {
+        _poolManager.DiscardChunks(Item.TempFolderPath);
+        Item.DownloadedBytes = 0;
+        Item.MergeProgressPercentage = 0;
+    }
+
     private async Task RunDownloadCycleAsync(RemoteFileInfo fileInfo, CancellationToken token)
     {
+        // A pause that landed while the probe was answering has already set the
+        // status; announcing Downloading over it would un-pause the row.
+        token.ThrowIfCancellationRequested();
         SetStatus(DownloadStatus.Downloading);
 
         bool completed = await _poolManager

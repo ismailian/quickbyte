@@ -7,11 +7,14 @@ namespace QuickByte.Core.Helpers;
 /// Strategy-pattern retry executor with exponential backoff. Used by
 /// connections to transparently recover from transient network failures.
 ///
-/// Two failures are deliberately *not* transient and end the loop immediately:
-/// cancellation, and <see cref="AuthenticationRequiredException"/>. A wrong
-/// password will be just as wrong on the fourth attempt, and retrying it costs
-/// the user the real error message — buried under a backoff delay — while some
-/// servers count the repeats towards a lockout.
+/// Three failures are deliberately *not* transient and end the loop immediately:
+/// cancellation, <see cref="AuthenticationRequiredException"/>, and
+/// <see cref="RemoteFileChangedException"/>. A wrong password will be just as
+/// wrong on the fourth attempt, and retrying it costs the user the real error
+/// message — buried under a backoff delay — while some servers count the repeats
+/// towards a lockout. A file that changed on the server is no more fixable by
+/// this connection asking again: the chunks of every sibling belong to the old
+/// version too, and the decision belongs to the download as a whole.
 /// </summary>
 public static class RetryPolicy
 {
@@ -41,5 +44,7 @@ public static class RetryPolicy
     }
 
     private static bool IsTransient(Exception exception) =>
-        exception is not OperationCanceledException and not AuthenticationRequiredException;
+        exception is not OperationCanceledException
+            and not AuthenticationRequiredException
+            and not RemoteFileChangedException;
 }

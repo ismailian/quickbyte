@@ -287,6 +287,67 @@ public sealed class RemoteFileInfoProviderTests
         Assert.Equal("ProtonVPN_v5.1.7_x64.exe", info.FileName);
     }
 
+    // --------------------------------------------------------- the version --
+
+    [Fact]
+    public async Task The_validators_are_kept_as_sent_weakness_and_all()
+    {
+        // The W/ prefix is what says the tag may never be sent in If-Range.
+        var modified = new DateTimeOffset(2026, 9, 1, 8, 30, 0, TimeSpan.Zero);
+        using var stub = new StubServer(
+            Validated(Head(size: Size, acceptRanges: true), "W/\"v1\"", modified),
+            Validated(PartialProbe(), "W/\"v1\"", modified));
+
+        var info = await new RemoteFileInfoProvider(stub.Client).GetFileInfoAsync(Url);
+
+        Assert.Equal("W/\"v1\"", info.ETag);
+        Assert.Equal(modified, info.LastModified);
+        Assert.Equal("example.com", info.Version.Host);
+    }
+
+    [Fact]
+    public async Task A_validator_the_head_and_the_probe_disagree_about_is_dropped()
+    {
+        // A tag minted per request, or by two edges hashing something of their
+        // own. Keeping it would make every resume look like a changed file.
+        var modified = new DateTimeOffset(2026, 9, 1, 8, 30, 0, TimeSpan.Zero);
+        using var stub = new StubServer(
+            Validated(Head(size: Size, acceptRanges: true), "\"request-1\"", modified),
+            Validated(PartialProbe(), "\"request-2\"", modified));
+
+        var info = await new RemoteFileInfoProvider(stub.Client).GetFileInfoAsync(Url);
+
+        Assert.Null(info.ETag);
+        Assert.Equal(modified, info.LastModified);
+    }
+
+    [Fact]
+    public async Task A_tag_weakened_on_one_response_still_agrees_with_itself()
+    {
+        using var stub = new StubServer(
+            Validated(Head(size: Size, acceptRanges: true), "\"v1\"", null),
+            Validated(PartialProbe(), "W/\"v1\"", null));
+
+        var info = await new RemoteFileInfoProvider(stub.Client).GetFileInfoAsync(Url);
+
+        Assert.Equal("\"v1\"", info.ETag);
+    }
+
+    [Fact]
+    public async Task The_probe_itself_is_never_conditional()
+    {
+        // It is how a resume learns which version is current; asking on
+        // condition of the old one would hide the answer.
+        using var stub = new StubServer(Head(size: Size, acceptRanges: true), PartialProbe());
+
+        await new RemoteFileInfoProvider(stub.Client).GetFileInfoAsync(Url, new RequestOptions
+        {
+            ResumeValidator = new RemoteFileVersion { ETag = "\"v1\"" }
+        });
+
+        Assert.All(stub.Requests, request => Assert.Null(request.IfRange));
+    }
+
     // ------------------------------------------------------------- plumbing --
 
     private static Func<HttpRequestMessage, HttpResponseMessage> Head(
@@ -331,6 +392,16 @@ public sealed class RemoteFileInfoProviderTests
             return response;
         };
 
+    private static Func<HttpRequestMessage, HttpResponseMessage> Validated(
+        Func<HttpRequestMessage, HttpResponseMessage> respond, string? etag, DateTimeOffset? lastModified) =>
+        request =>
+        {
+            var response = respond(request);
+            if (etag is not null) response.Headers.ETag = EntityTagHeaderValue.Parse(etag);
+            response.Content.Headers.LastModified = lastModified;
+            return response;
+        };
+
     private static HttpResponseMessage Named(HttpResponseMessage response, string fileName)
     {
         response.Content.Headers.ContentDisposition =
@@ -360,7 +431,7 @@ public sealed class RemoteFileInfoProviderTests
         public void Dispose() => Client.Dispose();
 
         /// <summary>What one request carried, captured before the message is disposed.</summary>
-        public sealed record Asked(string Method, string? Range, string? CacheControl, string? Pragma);
+        public sealed record Asked(string Method, string? Range, string? CacheControl, string? Pragma, string? IfRange);
 
         private sealed class Handler : HttpMessageHandler
         {
@@ -377,7 +448,8 @@ public sealed class RemoteFileInfoProviderTests
                     request.Method.Method,
                     request.Headers.Range?.ToString(),
                     request.Headers.CacheControl?.ToString(),
-                    request.Headers.Pragma.Count > 0 ? request.Headers.Pragma.First().ToString() : null));
+                    request.Headers.Pragma.Count > 0 ? request.Headers.Pragma.First().ToString() : null,
+                    request.Headers.IfRange?.ToString()));
 
                 var respond = _script[Math.Min(Requests.Count - 1, _script.Length - 1)];
                 return Task.FromResult(respond(request));

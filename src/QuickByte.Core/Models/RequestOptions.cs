@@ -44,11 +44,32 @@ public sealed class RequestOptions
     /// </summary>
     public bool BypassCache { get; init; }
 
+    /// <summary>
+    /// The version of the file the download's chunks belong to, which ranged
+    /// requests present as <c>If-Range</c> so a server whose file has changed
+    /// answers with the new file rather than the tail of it.
+    ///
+    /// Only the connections use it. The probe is how a download finds out what the
+    /// current version <em>is</em>, so it must never be conditional on the old
+    /// one. Null when the server never proved it can serve ranges, or proved it
+    /// cannot evaluate the condition — see
+    /// <see cref="DownloadItem.IfRangeUnsupported"/>.
+    /// </summary>
+    public RemoteFileVersion? ResumeValidator { get; init; }
+
     public bool HasCredentials => Credentials is { IsEmpty: false };
 
     public bool HasHeaders => Headers is { Count: > 0 };
 
     /// <summary>The same request, asked past any intermediary cache.</summary>
     public RequestOptions WithCacheBypass() =>
-        BypassCache ? this : new RequestOptions { Credentials = Credentials, Headers = Headers, BypassCache = true };
+        BypassCache
+            ? this
+            : new RequestOptions
+            {
+                Credentials = Credentials,
+                Headers = Headers,
+                BypassCache = true,
+                ResumeValidator = ResumeValidator
+            };
 }

@@ -1,5 +1,6 @@
 using QuickByte.Core.Enums;
 using QuickByte.Core.Events;
+using QuickByte.Core.Exceptions;
 using QuickByte.Core.Interfaces;
 using QuickByte.Core.Models;
 using QuickByte.Core.Services;
@@ -257,6 +258,141 @@ public sealed class DownloadServiceTests
         Assert.Equal(DownloadStatus.Completed, fixture.Item.Status);
     }
 
+    // ------------------------------------------- a file replaced on the server --
+
+    [Fact]
+    public async Task A_resume_throws_away_the_chunks_of_a_file_the_server_has_since_replaced()
+    {
+        // The corruption this exists for: chunks of the old version and the tail
+        // of the new one, merged into a file that is neither, with no error.
+        using var fixture = new Fixture();
+        fixture.Item.TotalBytes = 1000;
+        fixture.Item.DownloadedBytes = 400;
+        fixture.Item.RemoteVersion = Version("\"v1\"");
+        fixture.Info.ETag = "\"v2\"";
+
+        await fixture.Service.StartAsync();
+
+        Assert.Equal(1, fixture.Pool.Discards);
+        Assert.Equal("\"v2\"", fixture.Item.RemoteVersion!.ETag);
+        Assert.Equal(DownloadStatus.Completed, fixture.Item.Status);
+    }
+
+    [Fact]
+    public async Task A_resume_of_the_version_already_on_disk_keeps_every_chunk()
+    {
+        using var fixture = new Fixture();
+        fixture.Item.TotalBytes = 1000;
+        fixture.Item.RemoteVersion = Version("\"v1\"");
+        fixture.Info.ETag = "\"v1\"";
+
+        await fixture.Service.StartAsync();
+
+        Assert.Equal(0, fixture.Pool.Discards);
+    }
+
+    [Fact]
+    public async Task A_file_that_changed_length_is_a_different_file_even_without_validators()
+    {
+        // A length change also moves every segment boundary, so the old chunks
+        // would resume at offsets that no longer belong to them.
+        using var fixture = new Fixture();
+        fixture.Item.TotalBytes = 900;
+        fixture.Info.ContentLength = 1000;
+
+        await fixture.Service.StartAsync();
+
+        Assert.Equal(1, fixture.Pool.Discards);
+        Assert.Equal(1000, fixture.Item.TotalBytes);
+    }
+
+    [Fact]
+    public async Task A_download_recorded_before_versions_were_kept_adopts_one_without_losing_anything()
+    {
+        using var fixture = new Fixture();
+        fixture.Item.TotalBytes = 1000;
+        fixture.Item.RemoteVersion = null;
+        fixture.Info.ETag = "\"v1\"";
+
+        await fixture.Service.StartAsync();
+
+        Assert.Equal(0, fixture.Pool.Discards);
+        Assert.Equal("\"v1\"", fixture.Item.RemoteVersion!.ETag);
+    }
+
+    [Fact]
+    public async Task A_change_a_connection_reports_is_confirmed_by_a_probe_before_the_chunks_go()
+    {
+        using var fixture = new Fixture();
+        fixture.Pool.ThrowChangedTimes = 1;
+        fixture.Provider.Respond = probe => Info(probe == 1 ? "\"v1\"" : "\"v2\"");
+
+        await fixture.Service.StartAsync();
+
+        Assert.Equal(2, fixture.Provider.Probes);
+        Assert.Equal(1, fixture.Pool.Discards);
+        Assert.False(fixture.Item.IfRangeUnsupported);
+        Assert.Equal("\"v2\"", fixture.Item.RemoteVersion!.ETag);
+        Assert.Equal(DownloadStatus.Completed, fixture.Item.Status);
+    }
+
+    [Fact]
+    public async Task A_change_the_probe_contradicts_is_the_condition_s_fault_and_costs_no_chunks()
+    {
+        // A server that does not evaluate If-Range, or whose edges mint their own
+        // ETags, answers with a whole file for a version that never changed.
+        // Discarding on its word would cost hours for nothing.
+        using var fixture = new Fixture();
+        fixture.Pool.ThrowChangedTimes = 1;
+        fixture.Provider.Respond = _ => Info("\"v1\"");
+
+        await fixture.Service.StartAsync();
+
+        Assert.Equal(0, fixture.Pool.Discards);
+        Assert.True(fixture.Item.IfRangeUnsupported);
+        Assert.Equal(DownloadStatus.Completed, fixture.Item.Status);
+    }
+
+    [Fact]
+    public async Task A_file_that_never_holds_still_fails_instead_of_restarting_forever()
+    {
+        using var fixture = new Fixture();
+        fixture.Pool.ThrowChangedTimes = int.MaxValue;
+        fixture.Provider.Respond = probe => Info($"\"v{probe}\"");
+
+        await fixture.Service.StartAsync();
+
+        Assert.Equal(DownloadStatus.Failed, fixture.Item.Status);
+        Assert.Contains("kept changing", fixture.Item.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task A_pause_during_the_confirming_probe_is_a_pause()
+    {
+        using var fixture = new Fixture();
+        fixture.Pool.ThrowChangedTimes = 1;
+        fixture.Provider.Respond = probe =>
+        {
+            if (probe == 2) fixture.Service.Pause();
+            return Info("\"v1\"");
+        };
+
+        await fixture.Service.StartAsync();
+
+        Assert.Equal(DownloadStatus.Paused, fixture.Item.Status);
+    }
+
+    private static RemoteFileVersion Version(string etag) => new() { ETag = etag, Host = "example.com" };
+
+    private static RemoteFileInfo Info(string etag) => new()
+    {
+        ContentLength = 1000,
+        ContentType = "application/octet-stream",
+        SupportsRangeRequests = true,
+        FinalUrl = "https://example.com/file.bin",
+        ETag = etag
+    };
+
     // ------------------------------------------------------------- plumbing --
 
     private sealed class Fixture : IDisposable
@@ -272,7 +408,12 @@ public sealed class DownloadServiceTests
                 SaveFolder = _folder.Path
             };
             Settings = new FakeSettings(new DownloadSettings { TempFolder = _folder.Path });
-            Info = new RemoteFileInfo { ContentLength = 1000, ContentType = "application/octet-stream" };
+            Info = new RemoteFileInfo
+            {
+                ContentLength = 1000,
+                ContentType = "application/octet-stream",
+                FinalUrl = "https://example.com/file.bin"
+            };
             Provider = new FakeInfoProvider(Info);
             Pool = new FakePool();
             Merger = new FakeMerger();
@@ -323,12 +464,15 @@ public sealed class DownloadServiceTests
         public int Probes { get; private set; }
         public Exception? Throw { get; set; }
 
+        /// <summary>Answers probe N (counting from 1) when set; otherwise every probe gets the fixture's info.</summary>
+        public Func<int, RemoteFileInfo>? Respond { get; set; }
+
         public Task<RemoteFileInfo> GetFileInfoAsync(
             string url, RequestOptions? options = null, CancellationToken cancellationToken = default)
         {
             Probes++;
             if (Throw is not null) return Task.FromException<RemoteFileInfo>(Throw);
-            return Task.FromResult(_info);
+            return Task.FromResult(Respond?.Invoke(Probes) ?? _info);
         }
     }
 
@@ -344,6 +488,13 @@ public sealed class DownloadServiceTests
         public int Runs { get; private set; }
         public TaskCompletionSource Started { get; set; } = new();
 
+        /// <summary>How many runs report that the file changed on the server before one completes.</summary>
+        public int ThrowChangedTimes { get; set; }
+
+        public int Discards { get; private set; }
+
+        public void DiscardChunks(string tempFolder) => Discards++;
+
         public IReadOnlyList<ConnectionInfo> Snapshot { get; } = Array.Empty<ConnectionInfo>();
 
         public async Task<bool> RunAsync(
@@ -355,6 +506,12 @@ public sealed class DownloadServiceTests
             if (BlockUntilCancelled)
             {
                 await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (ThrowChangedTimes > 0)
+            {
+                ThrowChangedTimes--;
+                throw new RemoteFileChangedException("The file on the server has changed.");
             }
 
             if (!Succeed && FailureMessage is not null) ConnectionFailed?.Invoke(this, FailureMessage);

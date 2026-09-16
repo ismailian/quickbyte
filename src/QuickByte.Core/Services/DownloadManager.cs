@@ -187,6 +187,7 @@ public sealed class DownloadManager : IDownloadManager
             ConnectionsCount = _settingsService.Current.ClampConnections(request.ConnectionsCount),
             SupportsResume = request.FileInfo.SupportsRangeRequests,
             BypassCache = request.FileInfo.BypassCache,
+            RemoteVersion = request.FileInfo.Version,
             Status = DownloadStatus.Queued,
             TempFolderPath = Path.Combine(_settingsService.Current.TempFolder, Guid.NewGuid().ToString("N")),
             Credentials = request.Credentials?.Clone(),

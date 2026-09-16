@@ -93,12 +93,37 @@ public sealed class DownloadItem
     /// </summary>
     public bool BypassCache { get; set; }
 
+    /// <summary>
+    /// The version of the remote file the chunks on disk belong to. Persisted,
+    /// because the resume it protects is typically the one after a restart: the
+    /// probe that runs then compares what the server describes now with this,
+    /// and connections present it as <c>If-Range</c>. See
+    /// <see cref="Helpers.FileVersionCheck"/>.
+    /// </summary>
+    public RemoteFileVersion? RemoteVersion { get; set; }
+
+    /// <summary>
+    /// This server answered <c>If-Range</c> with a whole file for a version a
+    /// probe had just confirmed was current. It does not evaluate the condition
+    /// (or its edges disagree about validators), so asking would restart the
+    /// download for nothing; its connections stop asking. Persisted so a resume
+    /// does not learn it again at the cost of another restart.
+    /// </summary>
+    public bool IfRangeUnsupported { get; set; }
+
     /// <summary>Bundles the fields above into the shape the engine takes.</summary>
     public RequestOptions ToRequestOptions() => new()
     {
         Credentials = Credentials,
         Headers = Headers.Count > 0 ? Headers : null,
-        BypassCache = BypassCache
+        BypassCache = BypassCache,
+
+        // Only for a server that has proven it serves ranges. One that has not is
+        // fetched on a single connection that expects a 200, and presenting a
+        // condition to it would turn that expected answer into a false alarm.
+        ResumeValidator = SupportsResume && !IfRangeUnsupported && RemoteVersion is { HasValidator: true }
+            ? RemoteVersion
+            : null
     };
 
     public double ProgressPercentage =>

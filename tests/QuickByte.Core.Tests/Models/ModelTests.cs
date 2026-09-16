@@ -186,6 +186,51 @@ public sealed class DownloadItemTests
     }
 
     [Fact]
+    public void ToRequestOptions_presents_the_version_only_to_a_server_that_proved_it_serves_ranges()
+    {
+        // A server that has not answered a range is fetched on one connection
+        // that expects a 200. A condition would turn that into a false alarm.
+        var version = new RemoteFileVersion { ETag = "\"v1\"", Host = "example.com" };
+
+        Assert.Same(version, new DownloadItem { SupportsResume = true, RemoteVersion = version }.ToRequestOptions().ResumeValidator);
+        Assert.Null(new DownloadItem { SupportsResume = false, RemoteVersion = version }.ToRequestOptions().ResumeValidator);
+    }
+
+    [Fact]
+    public void ToRequestOptions_stops_presenting_a_version_the_server_cannot_evaluate()
+    {
+        var item = new DownloadItem
+        {
+            SupportsResume = true,
+            IfRangeUnsupported = true,
+            RemoteVersion = new RemoteFileVersion { ETag = "\"v1\"" }
+        };
+
+        Assert.Null(item.ToRequestOptions().ResumeValidator);
+    }
+
+    [Fact]
+    public void ToRequestOptions_presents_no_version_that_has_no_validator_in_it()
+    {
+        var item = new DownloadItem { SupportsResume = true, RemoteVersion = new RemoteFileVersion { Host = "example.com" } };
+
+        Assert.Null(item.ToRequestOptions().ResumeValidator);
+    }
+
+    [Fact]
+    public void A_version_is_tied_to_the_host_the_probe_ended_up_at()
+    {
+        var info = new RemoteFileInfo
+        {
+            FinalUrl = "https://objects.example.net:8443/f/setup.exe?sig=abc",
+            ETag = "\"v1\""
+        };
+
+        Assert.Equal("objects.example.net:8443", info.Version.Host);
+        Assert.Equal("\"v1\"", info.Version.ETag);
+    }
+
+    [Fact]
     public void RequestOptions_None_is_anonymous_and_header_free()
     {
         Assert.False(RequestOptions.None.HasCredentials);
@@ -208,6 +253,7 @@ public sealed class DownloadItemTests
 
         Assert.True(bypassing.BypassCache);
         Assert.Equal("alice", bypassing.Credentials!.UserName);
+        Assert.Null(bypassing.ResumeValidator);
         Assert.Equal("session=abc", bypassing.Headers!["Cookie"]);
         Assert.False(original.BypassCache);
     }

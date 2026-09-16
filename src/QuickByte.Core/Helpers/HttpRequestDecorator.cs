@@ -50,6 +50,11 @@ internal static class HttpRequestDecorator
             // Authorization are dropped because this request owns them — a
             // stale captured Range would silently truncate the segment.
             if (name.Equals("Range", StringComparison.OrdinalIgnoreCase)) continue;
+
+            // Conditionals likewise belong to the request that makes them. A
+            // captured If-None-Match turns the probe into a 304 with no size, and
+            // a stale If-Range would decide for the server which version counts.
+            if (IsConditional(name)) continue;
             if (options.HasCredentials && name.Equals("Authorization", StringComparison.OrdinalIgnoreCase)) continue;
 
             // Same rule for the pair just written above: a captured
@@ -63,4 +68,34 @@ internal static class HttpRequestDecorator
             request.Headers.TryAddWithoutValidation(name, value);
         }
     }
+
+    /// <summary>
+    /// The <c>If-Range</c> condition for a download's version: its strong ETag,
+    /// else its Last-Modified date, else nothing.
+    ///
+    /// A weak ETag yields nothing rather than falling back to the date. RFC 9110
+    /// forbids a weak tag in <c>If-Range</c> — a server must treat it as a
+    /// mismatch and send the whole file every time — and it forbids the date when
+    /// the client holds an entity tag for the representation at all.
+    /// </summary>
+    public static RangeConditionHeaderValue? IfRangeFor(RemoteFileVersion? version)
+    {
+        if (version is null) return null;
+
+        if (version.ETag is not null)
+        {
+            return version.HasStrongETag && EntityTagHeaderValue.TryParse(version.ETag, out var tag)
+                ? new RangeConditionHeaderValue(tag)
+                : null;
+        }
+
+        return version.LastModified is { } date ? new RangeConditionHeaderValue(date) : null;
+    }
+
+    private static bool IsConditional(string name) =>
+        name.Equals("If-Range", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("If-Match", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("If-None-Match", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("If-Modified-Since", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("If-Unmodified-Since", StringComparison.OrdinalIgnoreCase);
 }

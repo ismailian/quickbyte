@@ -1,4 +1,5 @@
 using QuickByte.Core.Enums;
+using QuickByte.Core.Exceptions;
 using QuickByte.Core.Helpers;
 using QuickByte.Core.Interfaces;
 using QuickByte.Core.Models;
@@ -228,6 +229,76 @@ public sealed class ConnectionPoolManagerTests
         Assert.Single(factory.Created.Select(c => c.Options).Distinct());
     }
 
+    // ------------------------------------------------- a file that changed --
+
+    [Fact]
+    public async Task A_connection_that_finds_the_file_changed_stops_every_sibling_and_reports_it()
+    {
+        // Every chunk belongs to the version that changed, not only the one whose
+        // connection noticed. The siblings would otherwise go on appending bytes
+        // of a file that no longer exists.
+        using var folder = new TempFolder();
+        var factory = new FakeConnectionFactory { ChangedConnection = 2, BlockOthersUntilCancelled = true };
+        var pool = new ConnectionPoolManager(factory);
+
+        await Assert.ThrowsAsync<RemoteFileChangedException>(() =>
+            pool.RunAsync(Item(folder, connections: 4), Info(1000, true), new DownloadSettings(), default));
+
+        Assert.All(factory.Created.Where(c => c.ConnectionId != 2), c => Assert.True(c.WasCancelled));
+    }
+
+    [Fact]
+    public async Task A_changed_file_is_not_reported_as_a_failed_connection()
+    {
+        using var folder = new TempFolder();
+        var pool = new ConnectionPoolManager(new FakeConnectionFactory { ChangedConnection = 0 });
+        var failures = new List<string>();
+        pool.ConnectionFailed += (_, message) => failures.Add(message);
+
+        await Assert.ThrowsAsync<RemoteFileChangedException>(() =>
+            pool.RunAsync(Item(folder, connections: 2), Info(1000, true), new DownloadSettings(), default));
+
+        Assert.Empty(failures);
+    }
+
+    [Fact]
+    public async Task A_pause_is_still_a_pause_and_not_a_changed_file()
+    {
+        using var folder = new TempFolder();
+        using var cts = new CancellationTokenSource();
+        var factory = new FakeConnectionFactory { BlockOthersUntilCancelled = true };
+        var pool = new ConnectionPoolManager(factory);
+
+        var running = pool.RunAsync(Item(folder, connections: 2), Info(1000, true), new DownloadSettings(), cts.Token);
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running);
+    }
+
+    [Fact]
+    public void DiscardChunks_deletes_the_chunk_files_and_nothing_else()
+    {
+        using var folder = new TempFolder();
+        folder.WriteFile("part0.tmp", new byte[] { 1 });
+        folder.WriteFile("part12.tmp", new byte[] { 2 });
+        folder.WriteFile("partial-notes.tmp", new byte[] { 3 });
+        folder.WriteFile("readme.txt", new byte[] { 4 });
+
+        new ConnectionPoolManager(new FakeConnectionFactory()).DiscardChunks(folder.Path);
+
+        Assert.Equal(
+            new[] { "partial-notes.tmp", "readme.txt" },
+            Directory.GetFiles(folder.Path).Select(Path.GetFileName).Order().ToArray());
+    }
+
+    [Fact]
+    public void DiscardChunks_shrugs_at_a_folder_that_was_never_created()
+    {
+        using var folder = new TempFolder();
+
+        new ConnectionPoolManager(new FakeConnectionFactory()).DiscardChunks(Path.Combine(folder.Path, "missing"));
+    }
+
     // ------------------------------------------------------------- plumbing --
 
     private static DownloadItem Item(TempFolder folder, int connections) => new()
@@ -250,6 +321,12 @@ public sealed class ConnectionPoolManagerTests
         /// <summary>Id of a connection that should throw instead of transferring.</summary>
         public int? FailConnection { get; init; }
 
+        /// <summary>Id of a connection that finds the file changed on the server.</summary>
+        public int? ChangedConnection { get; init; }
+
+        /// <summary>Every connection but <see cref="ChangedConnection"/> runs until it is cancelled.</summary>
+        public bool BlockOthersUntilCancelled { get; init; }
+
         public IDownloadConnection Create(
             int connectionId, string url, long rangeStart, long rangeEnd, long alreadyDownloaded,
             string chunkFilePath, DownloadSettings settings,
@@ -257,7 +334,11 @@ public sealed class ConnectionPoolManagerTests
         {
             var connection = new FakeConnection(
                 connectionId, rangeStart, rangeEnd, alreadyDownloaded, chunkFilePath, options,
-                shouldFail: FailConnection == connectionId);
+                shouldFail: FailConnection == connectionId)
+            {
+                FindsFileChanged = ChangedConnection == connectionId,
+                BlocksUntilCancelled = BlockOthersUntilCancelled && ChangedConnection != connectionId
+            };
             Created.Add(connection);
             return connection;
         }
@@ -292,8 +373,25 @@ public sealed class ConnectionPoolManagerTests
         public ConnectionStatus Status { get; private set; } = ConnectionStatus.Idle;
         public string? LastError { get; private set; }
 
-        public Task RunAsync(CancellationToken cancellationToken)
+        public bool FindsFileChanged { get; init; }
+        public bool BlocksUntilCancelled { get; init; }
+        public bool WasCancelled { get; private set; }
+
+        public async Task RunAsync(CancellationToken cancellationToken)
         {
+            if (FindsFileChanged)
+            {
+                // Give the siblings a moment to be mid-transfer.
+                await Task.Delay(20, CancellationToken.None);
+                throw new RemoteFileChangedException("changed");
+            }
+
+            if (BlocksUntilCancelled)
+            {
+                try { await Task.Delay(Timeout.Infinite, cancellationToken); }
+                catch (OperationCanceledException) { WasCancelled = true; throw; }
+            }
+
             if (_shouldFail)
             {
                 Status = ConnectionStatus.Failed;
@@ -303,7 +401,6 @@ public sealed class ConnectionPoolManagerTests
 
             BytesDownloaded = RangeEnd - RangeStart + 1;
             Status = ConnectionStatus.Finished;
-            return Task.CompletedTask;
         }
     }
 }

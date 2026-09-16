@@ -83,6 +83,7 @@ public sealed class RemoteFileInfoProvider : IRemoteFileInfoProvider
 
         string? serverFileName = null;
         bool headAnsweredEverything = false;
+        var validators = new ValidatorTally();
 
         try
         {
@@ -102,7 +103,7 @@ public sealed class RemoteFileInfoProvider : IRemoteFileInfoProvider
             // the prompt comes from there a round trip later.
             if (headResponse.IsSuccessStatusCode)
             {
-                serverFileName = Absorb(info, headResponse);
+                serverFileName = Absorb(info, headResponse, validators);
 
                 // Enough to name and size the file, but never enough to decide
                 // how many connections fetch it. That is what the probe is for.
@@ -120,7 +121,7 @@ public sealed class RemoteFileInfoProvider : IRemoteFileInfoProvider
             // one case it would skip the probe in is a HEAD that answered
             // everything, which is exactly the case this exists to stop
             // trusting.
-            string? probedName = await ProbeRangeSupportAsync(url, info, options, cancellationToken).ConfigureAwait(false);
+            string? probedName = await ProbeRangeSupportAsync(url, info, options, validators, cancellationToken).ConfigureAwait(false);
             serverFileName ??= probedName;
         }
         catch (Exception ex) when (headAnsweredEverything
@@ -133,6 +134,7 @@ public sealed class RemoteFileInfoProvider : IRemoteFileInfoProvider
             info.SupportsRangeRequests = false;
         }
 
+        validators.ApplyTo(info);
         return Finish(info, serverFileName);
     }
 
@@ -144,14 +146,15 @@ public sealed class RemoteFileInfoProvider : IRemoteFileInfoProvider
     /// </summary>
     /// <returns>The file name the server named on the probe, or null.</returns>
     private async Task<string?> ProbeRangeSupportAsync(
-        string url, RemoteFileInfo info, RequestOptions? options, CancellationToken cancellationToken)
+        string url, RemoteFileInfo info, RequestOptions? options, ValidatorTally validators,
+        CancellationToken cancellationToken)
     {
         using var response = await SendRangedProbeAsync(url, options, cancellationToken).ConfigureAwait(false);
 
         ThrowIfChallenged(response, info, options);
         response.EnsureSuccessStatusCode();
 
-        string? fileName = Absorb(info, response, fromRangedProbe: true);
+        string? fileName = Absorb(info, response, validators, fromRangedProbe: true);
 
         if (response.StatusCode == HttpStatusCode.PartialContent)
         {
@@ -174,7 +177,7 @@ public sealed class RemoteFileInfoProvider : IRemoteFileInfoProvider
 
         info.SupportsRangeRequests = true;
         info.BypassCache = true;
-        return Absorb(info, revalidated, fromRangedProbe: true) ?? fileName;
+        return Absorb(info, revalidated, validators, fromRangedProbe: true) ?? fileName;
     }
 
     private async Task<HttpResponseMessage> SendRangedProbeAsync(
@@ -210,7 +213,8 @@ public sealed class RemoteFileInfoProvider : IRemoteFileInfoProvider
     /// Copies what a response knows into <paramref name="info"/> and returns the
     /// file name the server named explicitly, or null if it named none.
     /// </summary>
-    private static string? Absorb(RemoteFileInfo info, HttpResponseMessage response, bool fromRangedProbe = false)
+    private static string? Absorb(
+        RemoteFileInfo info, HttpResponseMessage response, ValidatorTally validators, bool fromRangedProbe = false)
     {
         // First, before anything derives a name from it: HttpClient follows
         // redirects itself, so RequestUri is the address the bytes will really
@@ -243,8 +247,7 @@ public sealed class RemoteFileInfoProvider : IRemoteFileInfoProvider
         if (response.Content.Headers.ContentType?.MediaType is { Length: > 0 } mediaType)
             info.ContentType = mediaType;
 
-        info.ETag ??= response.Headers.ETag?.Tag;
-        info.LastModified ??= response.Content.Headers.LastModified;
+        validators.Add(response);
 
         // FileNameStar is the RFC 5987 form and already decoded by the BCL; it
         // wins because it is the one that can carry non-ASCII correctly.
@@ -268,5 +271,47 @@ public sealed class RemoteFileInfoProvider : IRemoteFileInfoProvider
 
         info.FileName = FileNameHelper.EnsureExtension(name, info.ContentType);
         return info;
+    }
+
+    /// <summary>
+    /// Collects the validators every response of one probe carried, and keeps
+    /// only those they all agreed on.
+    ///
+    /// A resume compares these with what the next probe says, and presents them
+    /// as <c>If-Range</c>. An ETag that differs between a HEAD and a GET made a
+    /// second apart — minted per request, or by two edges that each hash
+    /// something of their own — would fail both of those every single time, and
+    /// read as a file that changed while nobody was looking. Dropping it costs
+    /// the protection on that one server; keeping it costs the download.
+    /// </summary>
+    private sealed class ValidatorTally
+    {
+        private string? _etag;
+        private bool _etagDisagreed;
+        private DateTimeOffset? _lastModified;
+        private bool _lastModifiedDisagreed;
+
+        public void Add(HttpResponseMessage response)
+        {
+            // ToString rather than Tag: the W/ prefix is what says the tag may not
+            // be used in If-Range, and Tag drops it.
+            if (response.Headers.ETag?.ToString() is { Length: > 0 } etag)
+            {
+                if (_etag is null) _etag = etag;
+                else if (!FileVersionCheck.SameOpaqueTag(_etag, etag)) _etagDisagreed = true;
+            }
+
+            if (response.Content.Headers.LastModified is { } lastModified)
+            {
+                if (_lastModified is null) _lastModified = lastModified;
+                else if (_lastModified != lastModified) _lastModifiedDisagreed = true;
+            }
+        }
+
+        public void ApplyTo(RemoteFileInfo info)
+        {
+            info.ETag = _etagDisagreed ? null : _etag;
+            info.LastModified = _lastModifiedDisagreed ? null : _lastModified;
+        }
     }
 }

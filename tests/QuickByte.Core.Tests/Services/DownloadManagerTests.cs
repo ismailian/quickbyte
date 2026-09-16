@@ -106,6 +106,19 @@ public sealed class DownloadManagerTests
     }
 
     [Fact]
+    public async Task Adding_a_download_records_the_version_of_the_file_the_probe_described()
+    {
+        using var fixture = new Fixture();
+        fixture.Info.ETag = "\"v1\"";
+        fixture.Info.FinalUrl = "https://cdn.example.com/a.bin";
+
+        var item = await fixture.AddAsync(startImmediately: false);
+
+        Assert.Equal("\"v1\"", item.RemoteVersion!.ETag);
+        Assert.Equal("cdn.example.com", item.RemoteVersion.Host);
+    }
+
+    [Fact]
     public async Task The_captured_headers_are_stored_case_insensitively()
     {
         using var fixture = new Fixture();
@@ -332,6 +345,33 @@ public sealed class DownloadManagerTests
         Assert.Equal(DownloadStatus.Completed, item.Status);
         Assert.Equal(content, File.ReadAllBytes(item.FullPath));
         Assert.Contains(fixture.Factory.ResumeOffsets, offset => offset > 0);
+    }
+
+    [Fact]
+    public async Task A_file_replaced_on_the_server_between_attempts_is_not_merged_with_the_old_one()
+    {
+        // Half of version 1 on disk, then the publisher replaces the file. The
+        // retry used to append version 2's tail to version 1's head and call the
+        // result complete.
+        using var fixture = new Fixture();
+        byte[] version1 = Enumerable.Range(0, 4000).Select(i => (byte)(i % 251)).ToArray();
+        byte[] version2 = Enumerable.Range(0, 4000).Select(i => (byte)(250 - i % 251)).ToArray();
+        fixture.Factory.Content = version1;
+        fixture.Info.ContentLength = version1.Length;
+        fixture.Info.SupportsRangeRequests = true;
+        fixture.Info.ETag = "\"v1\"";
+
+        fixture.Factory.WriteFraction = 0.5;
+        var item = await fixture.AddAsync(fileName: "replaced.bin", connections: 4, startImmediately: true);
+        Assert.Equal(DownloadStatus.Failed, item.Status);
+
+        fixture.Factory.Content = version2;
+        fixture.Info.ETag = "\"v2\"";
+        fixture.Factory.WriteFraction = 1.0;
+        await fixture.Manager.RetryAsync(item.Id);
+
+        Assert.Equal(DownloadStatus.Completed, item.Status);
+        Assert.Equal(version2, File.ReadAllBytes(item.FullPath));
     }
 
     // ------------------------------------------------------------- plumbing --

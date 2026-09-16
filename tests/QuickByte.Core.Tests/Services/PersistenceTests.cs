@@ -60,6 +60,29 @@ public sealed class DownloadRepositoryTests
     }
 
     [Fact]
+    public void The_version_the_chunks_belong_to_survives_a_restart()
+    {
+        // The resume it protects is usually the one after a restart: that is
+        // when the probe compares the server's file with the one on disk.
+        using var folder = new TempFolder();
+        var repository = new DownloadRepository(folder.Path);
+        var modified = new DateTimeOffset(2026, 9, 1, 8, 30, 0, TimeSpan.Zero);
+        repository.SaveAll(new[]
+        {
+            new DownloadItem
+            {
+                RemoteVersion = new RemoteFileVersion { ETag = "W/\"v1\"", LastModified = modified, Host = "example.com" },
+                IfRangeUnsupported = true
+            }
+        });
+
+        var restored = repository.LoadAll().Single();
+
+        Assert.Equal(new RemoteFileVersion { ETag = "W/\"v1\"", LastModified = modified, Host = "example.com" }, restored.RemoteVersion);
+        Assert.True(restored.IfRangeUnsupported);
+    }
+
+    [Fact]
     public void A_password_is_never_written_to_the_file_in_the_clear()
     {
         using var folder = new TempFolder();

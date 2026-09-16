@@ -46,9 +46,26 @@ public sealed class RemoteFileInfo
     /// </summary>
     public bool BypassCache { get; set; }
 
+    /// <summary>
+    /// The server's <c>ETag</c>, weakness prefix and all. Left null when two
+    /// responses to the same probe disagreed about it — a validator that changes
+    /// between two requests a second apart describes the request, not the file,
+    /// and trusting it would make every resume look like a changed file.
+    /// </summary>
     public string? ETag { get; set; }
+
+    /// <summary>Last-Modified (HTTP) or MDTM (FTP); null on disagreement, as above.</summary>
     public DateTimeOffset? LastModified { get; set; }
+
     public string FinalUrl { get; set; } = string.Empty;
+
+    /// <summary>The validators above, tied to the host that issued them.</summary>
+    public RemoteFileVersion Version => new()
+    {
+        ETag = ETag,
+        LastModified = LastModified,
+        Host = Uri.TryCreate(FinalUrl, UriKind.Absolute, out var uri) ? uri.Authority : null
+    };
 
     /// <summary>
     /// Set when the server answered the probe with a challenge (HTTP 401, FTP

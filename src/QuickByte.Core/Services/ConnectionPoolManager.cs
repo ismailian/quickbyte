@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Threading;
 using QuickByte.Core.Enums;
 using QuickByte.Core.Events;
+using QuickByte.Core.Exceptions;
 using QuickByte.Core.Helpers;
 using QuickByte.Core.Interfaces;
 using QuickByte.Core.Models;
@@ -29,6 +30,7 @@ public sealed class ConnectionPoolManager : IConnectionPoolManager
     private Timer? _reportTimer;
     private Guid _downloadId;
     private long _totalBytes;
+    private RemoteFileChangedException? _fileChanged;
     private readonly object _sync = new();
 
     public event EventHandler<DownloadProgressEventArgs>? ProgressChanged;
@@ -71,9 +73,15 @@ public sealed class ConnectionPoolManager : IConnectionPoolManager
         int interval = Math.Clamp(settings.ProgressUpdateIntervalMilliseconds, 50, 2000);
         _reportTimer = new Timer(_ => ReportProgress(), null, 0, interval);
 
+        // Linked rather than the caller's token directly: one connection learning
+        // that the file changed on the server has to stop all of them, and that
+        // is not a pause the caller asked for.
+        _fileChanged = null;
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
         try
         {
-            var tasks = _connections.Select(c => RunConnectionSafeAsync(c, cancellationToken)).ToArray();
+            var tasks = _connections.Select(c => RunConnectionSafeAsync(c, linked)).ToArray();
             await Task.WhenAll(tasks).ConfigureAwait(false);
         }
         finally
@@ -84,6 +92,11 @@ public sealed class ConnectionPoolManager : IConnectionPoolManager
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+
+        // Every chunk belongs to the version that changed, not just the one whose
+        // connection noticed, so this is the download's decision rather than a
+        // failed connection's. DownloadService makes it.
+        if (_fileChanged is not null) throw _fileChanged;
 
         bool allFinished = _connections.All(c => c.Status == ConnectionStatus.Finished);
         return allFinished;
@@ -187,15 +200,24 @@ public sealed class ConnectionPoolManager : IConnectionPoolManager
             : -1;
     }
 
-    private async Task RunConnectionSafeAsync(IDownloadConnection connection, CancellationToken cancellationToken)
+    private async Task RunConnectionSafeAsync(IDownloadConnection connection, CancellationTokenSource run)
     {
         try
         {
-            await connection.RunAsync(cancellationToken).ConfigureAwait(false);
+            await connection.RunAsync(run.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
             // Expected on pause/stop — leave partial chunk in place for resume.
+        }
+        catch (RemoteFileChangedException ex)
+        {
+            Interlocked.CompareExchange(ref _fileChanged, ex, null);
+
+            // The siblings are appending bytes of a version that no longer exists
+            // to chunks that are about to be judged. Stopping them now saves the
+            // bandwidth; the chunks themselves are left for DownloadService.
+            try { run.Cancel(); } catch (ObjectDisposedException) { /* the run already ended */ }
         }
         catch (Exception ex)
         {
@@ -245,6 +267,23 @@ public sealed class ConnectionPoolManager : IConnectionPoolManager
             RetryCount = c.RetryCount,
             LastError = c.LastError
         }).ToList();
+    }
+
+    public void DiscardChunks(string tempFolder)
+    {
+        if (string.IsNullOrWhiteSpace(tempFolder)) return;
+
+        string[] chunks;
+        try { chunks = Directory.GetFiles(tempFolder, $"{ChunkPrefix}*.tmp"); }
+        catch { return; /* best-effort: a folder that is not there holds nothing to discard */ }
+
+        foreach (string path in chunks)
+        {
+            // Only this pool's own names. The folder is the download's, but a
+            // file in it that does not parse as a chunk was not put there by us.
+            if (ChunkIndexOf(path) < 0) continue;
+            try { File.Delete(path); } catch { /* best-effort */ }
+        }
     }
 
     public IReadOnlyList<string> GetOrderedChunkPaths()

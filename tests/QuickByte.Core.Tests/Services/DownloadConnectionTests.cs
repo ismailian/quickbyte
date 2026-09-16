@@ -244,6 +244,79 @@ public sealed class DownloadConnectionTests
         Assert.Equal(ConnectionStatus.Finished, connection.Status);
     }
 
+    // ------------------------------------------- a file that changed meanwhile --
+
+    private static readonly RemoteFileVersion V1 = new() { ETag = "\"v1\"", Host = "example.com" };
+
+    [Fact]
+    public async Task A_resumed_segment_asks_on_condition_that_the_file_is_still_the_same()
+    {
+        using var folder = new TempFolder();
+        folder.WriteFile("part1.tmp", File100[50..70]);
+        using var stub = new StubServer(_ => Partial(File100[70..], 70, 99, 100));
+
+        var connection = Connection(stub, folder.File("part1.tmp"), 50, 99, alreadyDownloaded: 20,
+            options: new RequestOptions { ResumeValidator = V1 });
+        await connection.RunAsync(CancellationToken.None);
+
+        Assert.Equal("\"v1\"", stub.IfRanges.Single());
+        Assert.Equal(File100[50..], File.ReadAllBytes(folder.File("part1.tmp")));
+    }
+
+    [Fact]
+    public async Task A_whole_file_answer_to_the_condition_reports_a_changed_file_and_writes_nothing()
+    {
+        // The regression this exists for: bytes of a new version appended to a
+        // chunk of the old one, merged into a file that is neither, with no
+        // error anywhere. Even the first segment — which could otherwise restart
+        // from zero — must not: its siblings hold the old version.
+        using var folder = new TempFolder();
+        folder.WriteFile("part0.tmp", File100[..40]);
+        byte[] newVersion = Enumerable.Repeat((byte)0xAB, 100).ToArray();
+        using var stub = new StubServer(_ => Whole(newVersion));
+
+        var connection = Connection(stub, folder.File("part0.tmp"), 0, 99, alreadyDownloaded: 40,
+            settings: Settings(maxRetries: 3), options: new RequestOptions { ResumeValidator = V1 });
+
+        await Assert.ThrowsAsync<RemoteFileChangedException>(() => connection.RunAsync(CancellationToken.None));
+
+        Assert.Equal(File100[..40], File.ReadAllBytes(folder.File("part0.tmp")));
+
+        // And not retried: asking again gets the same answer.
+        Assert.Single(stub.Ranges);
+    }
+
+    [Fact]
+    public async Task A_mirror_the_request_was_redirected_to_is_asked_again_without_the_condition()
+    {
+        // A mirror redirector hands the request to a server that minted its own
+        // ETag for the identical file. Holding it to another server's validator
+        // would restart a download that was fine.
+        using var folder = new TempFolder();
+        int asked = 0;
+        using var stub = new StubServer(_ => asked++ == 0
+            ? From("https://mirror2.example.org/file.bin", Whole(File100))
+            : Partial(File100[50..], 50, 99, 100));
+
+        var connection = Connection(stub, folder.File("part1.tmp"), 50, 99,
+            options: new RequestOptions { ResumeValidator = V1 });
+        await connection.RunAsync(CancellationToken.None);
+
+        Assert.Equal(new string?[] { "\"v1\"", null }, stub.IfRanges);
+        Assert.Equal(File100[50..], File.ReadAllBytes(folder.File("part1.tmp")));
+    }
+
+    [Fact]
+    public async Task No_condition_is_sent_without_a_version_to_hold_the_server_to()
+    {
+        using var folder = new TempFolder();
+        using var stub = new StubServer(_ => Partial(File100, 0, 99, 100));
+
+        await Connection(stub, folder.File("part0.tmp"), 0, 99).RunAsync(CancellationToken.None);
+
+        Assert.Null(stub.IfRanges.Single());
+    }
+
     // --------------------------------------------------------- challenges --
 
     [Fact]
@@ -320,6 +393,13 @@ public sealed class DownloadConnectionTests
     private static HttpResponseMessage Whole(byte[] body) =>
         new(HttpStatusCode.OK) { Content = new ByteArrayContent(body) };
 
+    /// <summary>Marks a response as having come from wherever a redirect ended up.</summary>
+    private static HttpResponseMessage From(string url, HttpResponseMessage response)
+    {
+        response.RequestMessage = new HttpRequestMessage(HttpMethod.Get, url);
+        return response;
+    }
+
     /// <summary>An <see cref="HttpClient"/> whose answers the test writes, recording what was asked.</summary>
     private sealed class StubServer : IDisposable
     {
@@ -336,6 +416,9 @@ public sealed class DownloadConnectionTests
         /// <summary>The Range header of each request, in order.</summary>
         public List<string> Ranges => _handler.Ranges;
 
+        /// <summary>The If-Range header of each request, in order; null where there was none.</summary>
+        public List<string?> IfRanges => _handler.IfRanges;
+
         public void Dispose() => Client.Dispose();
 
         private sealed class Handler : HttpMessageHandler
@@ -346,13 +429,19 @@ public sealed class DownloadConnectionTests
 
             public List<string> Ranges { get; } = new();
 
+            public List<string?> IfRanges { get; } = new();
+
             protected override Task<HttpResponseMessage> SendAsync(
                 HttpRequestMessage request, CancellationToken cancellationToken)
             {
                 // Captured now: the connection disposes the request as soon as the
                 // response comes back.
                 Ranges.Add(request.Headers.Range?.ToString() ?? string.Empty);
-                return Task.FromResult(_respond(request));
+                IfRanges.Add(request.Headers.IfRange?.ToString());
+
+                var response = _respond(request);
+                response.RequestMessage ??= new HttpRequestMessage(request.Method, request.RequestUri);
+                return Task.FromResult(response);
             }
         }
     }

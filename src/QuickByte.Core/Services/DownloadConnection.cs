@@ -1,6 +1,7 @@
 using System.Threading;
 using System.Net;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using QuickByte.Core.Enums;
 using QuickByte.Core.Exceptions;
 using QuickByte.Core.Helpers;
@@ -106,31 +107,8 @@ public sealed class DownloadConnection : IDownloadConnection
 
         long start = RangeStart + BytesDownloaded;
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, _url);
-
-        // An open-ended "bytes=start-" when there is no known end. The sentinel
-        // written out as a literal 9223372036854775806 is a range a fair number
-        // of servers answer with 416 instead of the rest of the file.
-        request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(
-            start, IsUnbounded ? null : RangeEnd);
-        HttpRequestDecorator.Apply(request, _options);
-
-        using var response = await _httpClient
-            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-            .ConfigureAwait(false);
-
-        // Separated from the generic failure below so RetryPolicy stops rather
-        // than spending its attempts re-presenting the same rejected password.
-        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.ProxyAuthenticationRequired)
-        {
-            throw new AuthenticationRequiredException(
-                _options?.HasCredentials == true
-                    ? "The server rejected the supplied user name or password."
-                    : "The server requires a user name and password.")
-            { CredentialsWereSupplied = _options?.HasCredentials == true };
-        }
-
-        response.EnsureSuccessStatusCode();
+        var ifRange = HttpRequestDecorator.IfRangeFor(_options?.ResumeValidator);
+        using var response = await SendConditionalRangeAsync(start, ifRange, cancellationToken).ConfigureAwait(false);
 
         // 200 instead of 206 means the server ignored the Range header and is
         // answering with the whole file from byte zero — the HTTP twin of an FTP
@@ -232,5 +210,77 @@ public sealed class DownloadConnection : IDownloadConnection
 
         _status = ConnectionStatus.Finished;
         return true;
+    }
+
+    /// <summary>
+    /// Asks for the rest of this segment, conditional on the file still being the
+    /// version the download's chunks came from.
+    ///
+    /// <c>If-Range</c> is the one request header that turns "the file changed
+    /// while this was paused" from silent corruption into an answer: a server
+    /// holding a different version sends the whole new file with a 200 instead of
+    /// the tail of it with a 206. That 200 is only meaningful from the host that
+    /// issued the validator, though. <see cref="HttpClient"/> follows redirects on
+    /// its own and carries the header along, so a mirror redirector can hand the
+    /// request to a mirror that computes its own ETag for the identical file — and
+    /// holding that mirror to another server's validator would restart downloads
+    /// that were fine. Such a response is asked again without the condition, which
+    /// is exactly how the request looked before the condition existed.
+    /// </summary>
+    private async Task<HttpResponseMessage> SendConditionalRangeAsync(
+        long start, RangeConditionHeaderValue? ifRange, CancellationToken cancellationToken)
+    {
+        var response = await SendRangeAsync(start, ifRange, cancellationToken).ConfigureAwait(false);
+        if (ifRange is null || response.StatusCode == HttpStatusCode.PartialContent) return response;
+
+        string? answeredBy = response.RequestMessage?.RequestUri?.Authority;
+        if (FileVersionCheck.SameHost(answeredBy, _options?.ResumeValidator?.Host))
+        {
+            response.Dispose();
+            throw new RemoteFileChangedException(
+                "The file on the server has changed since this download started.");
+        }
+
+        response.Dispose();
+        return await SendRangeAsync(start, null, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<HttpResponseMessage> SendRangeAsync(
+        long start, RangeConditionHeaderValue? ifRange, CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, _url);
+
+        // An open-ended "bytes=start-" when there is no known end. The sentinel
+        // written out as a literal 9223372036854775806 is a range a fair number
+        // of servers answer with 416 instead of the rest of the file.
+        request.Headers.Range = new RangeHeaderValue(start, IsUnbounded ? null : RangeEnd);
+        HttpRequestDecorator.Apply(request, _options);
+        if (ifRange is not null) request.Headers.IfRange = ifRange;
+
+        var response = await _httpClient
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
+
+        try
+        {
+            // Separated from the generic failure below so RetryPolicy stops rather
+            // than spending its attempts re-presenting the same rejected password.
+            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.ProxyAuthenticationRequired)
+            {
+                throw new AuthenticationRequiredException(
+                    _options?.HasCredentials == true
+                        ? "The server rejected the supplied user name or password."
+                        : "The server requires a user name and password.")
+                { CredentialsWereSupplied = _options?.HasCredentials == true };
+            }
+
+            response.EnsureSuccessStatusCode();
+            return response;
+        }
+        catch
+        {
+            response.Dispose();
+            throw;
+        }
     }
 }

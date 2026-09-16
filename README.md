@@ -457,6 +457,51 @@ perfectly once the request reaches the origin. Which edge a given connection
 lands on varies, so the failure is intermittent — which is exactly the kind
 that gets reported as "it works in other download managers".
 
+### A resumed file is the same file
+
+Resume trusts the chunks on disk to be the head of the file the server is about
+to send the rest of. Nothing in HTTP guarantees that across a pause: a nightly
+build republished under the same URL, or an installer replaced by the next
+patch, is not an error anywhere. The old chunks and the new tail merge into a
+file that is neither, and the download reports success.
+
+So a download remembers which version its chunks came from —
+`DownloadItem.RemoteVersion`, the server's `ETag` and `Last-Modified` plus the
+host that issued them, persisted — and holds the server to it twice:
+
+- **Before it resumes.** Every probe is compared with the stored version
+  (`FileVersionCheck`). A different version throws the chunks away and the file
+  starts from zero.
+- **While it transfers.** Every ranged request carries `If-Range`. A server
+  holding a different version answers with the whole new file and a `200`
+  instead of a `206`; the connection refuses to write it
+  (`RemoteFileChangedException`), and the pool stops its siblings.
+
+Getting "changed" wrong costs hours of download, so the verdict needs evidence
+that does not argue with itself:
+
+- **A different size is decisive**, from any host. It also catches a quieter
+  corruption: a length change moves every segment boundary, and the old chunks
+  would resume at offsets that no longer belong to them.
+- **Validators are compared only from the host that issued them.** A mirror
+  redirector sends each request to whichever mirror it picks, and two mirrors
+  compute different ETags for the identical file. A connection redirected to
+  another host that answers `If-Range` with a `200` is simply asked again
+  without it.
+- **ETags that disagree while the dates agree decide nothing** — an rsync'd
+  mirror keeps the timestamp but may build its ETag from an inode number.
+- **A validator the probe's own two requests disagree about is dropped**; it
+  was minted per request and describes nothing.
+- **A connection's report is confirmed by a fresh probe** before anything is
+  deleted. If the probe still describes the same file, it is `If-Range` that
+  cannot be trusted on that server: `DownloadItem.IfRangeUnsupported` is set and
+  persisted, and nothing is thrown away. A file that changes more than three
+  times in one run fails with a message saying so.
+
+Weak ETags are never sent in `If-Range` (RFC 9110 forbids it), and a captured
+browser header that is any kind of conditional (`If-None-Match`, `If-Range`, …)
+is dropped, because a stale one would turn the probe into a `304`.
+
 ## Credentials
 
 **HTTP Basic** is sent pre-emptively rather than after a `401`: every
