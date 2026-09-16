@@ -384,6 +384,68 @@ public sealed class DownloadSettingsTests
         Assert.Equal(expected, settings.ClampBufferSize());
     }
 
+    // --------------------------------------------------- category folders --
+
+    private static DownloadSettings Sorted(Dictionary<FileCategory, string>? chosen = null) => new()
+    {
+        DefaultDownloadFolder = @"C:\Users\a\Downloads\QuickByte",
+        SortIntoCategoryFolders = true,
+        CategoryFolders = chosen ?? new Dictionary<FileCategory, string>()
+    };
+
+    [Fact]
+    public void Without_sorting_every_file_goes_to_the_default_folder()
+    {
+        var settings = Sorted(new() { [FileCategory.Video] = @"D:\Videos" });
+        settings.SortIntoCategoryFolders = false;
+
+        Assert.Equal(@"C:\Users\a\Downloads\QuickByte", settings.FolderFor("film.mkv"));
+    }
+
+    [Fact]
+    public void Sorting_puts_a_file_in_a_subfolder_named_after_its_kind()
+    {
+        Assert.Equal(@"C:\Users\a\Downloads\QuickByte\Programs", Sorted().FolderFor("setup.EXE"));
+        Assert.Equal(@"C:\Users\a\Downloads\QuickByte\Compressed", Sorted().FolderFor("archive.7z"));
+    }
+
+    [Fact]
+    public void A_file_of_no_known_kind_stays_in_the_default_folder()
+    {
+        // A subfolder called "Other" is not a place anyone looks.
+        Assert.Equal(@"C:\Users\a\Downloads\QuickByte", Sorted().FolderFor("notes.xyz"));
+        Assert.Equal(@"C:\Users\a\Downloads\QuickByte", Sorted().FolderFor("download"));
+    }
+
+    [Fact]
+    public void A_folder_chosen_for_a_kind_wins_over_the_subfolder()
+    {
+        Assert.Equal(@"D:\Media\Videos", Sorted(new() { [FileCategory.Video] = @"D:\Media\Videos" }).FolderFor("film.mp4"));
+    }
+
+    [Theory]
+    [InlineData(@"..\..\Windows")]
+    [InlineData(@"Videos")]
+    [InlineData(@"~\Videos")]
+    [InlineData(@"C:Videos")]
+    [InlineData("   ")]
+    public void A_chosen_folder_that_is_not_a_full_path_is_ignored(string chosen)
+    {
+        // settings.json is editable, and a relative path would resolve against
+        // wherever QuickByte happened to be started from.
+        var settings = Sorted(new() { [FileCategory.Video] = chosen });
+
+        Assert.Equal(@"C:\Users\a\Downloads\QuickByte\Video", settings.FolderFor("film.mp4"));
+    }
+
+    [Fact]
+    public void A_null_category_map_in_a_hand_edited_file_reads_as_empty()
+    {
+        var settings = new DownloadSettings { CategoryFolders = null! };
+
+        Assert.Empty(settings.CategoryFolders);
+    }
+
     [Fact]
     public void The_defaults_are_the_ones_the_app_is_documented_with()
     {

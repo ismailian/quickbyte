@@ -61,6 +61,16 @@ public sealed class NewDownloadForm : Form
     private RemoteFileInfo? _fetchedInfo;
 
     /// <summary>
+    /// Set once the user has typed in or browsed to a Save to folder. Until then the
+    /// box follows the file name into its category's folder (Options &gt; Folders);
+    /// after it, what they chose is left alone.
+    /// </summary>
+    private bool _saveFolderChosen;
+
+    /// <summary>Set while this form writes the Save to box itself, so that write is not mistaken for the user's.</summary>
+    private bool _settingSaveFolder;
+
+    /// <summary>
     /// The login this dialog has been given — from a <c>user:pass@host</c> URL,
     /// or from <see cref="CredentialsForm"/> after the server asked for one. Null
     /// for the overwhelming majority of downloads, which is why it has no fields
@@ -261,6 +271,8 @@ public sealed class NewDownloadForm : Form
         // is the half that says where the file is going. UserPath.Expand puts it
         // back before anything creates a directory from it.
         _saveFolderTextBox.Text = UserPath.Shorten(_settingsService.Current.DefaultDownloadFolder);
+        _saveFolderTextBox.TextChanged += (_, _) => { if (!_settingSaveFolder) _saveFolderChosen = true; };
+        _fileNameTextBox.TextChanged += (_, _) => FollowCategoryFolder();
         layout.Controls.Add(_saveFolderTextBox, 1, row);
         var browseButton = Theme.StyleButton(new Button { Text = "Browse…", Dock = DockStyle.Fill, Margin = new Padding(8, 4, 0, 4) });
         browseButton.Click += (_, _) => OnBrowseClicked();
@@ -503,6 +515,19 @@ public sealed class NewDownloadForm : Form
     {
         _statusLabel.Text = text;
         _statusLabel.ForeColor = color;
+    }
+
+    /// <summary>Points Save to at the file's category folder, unless the user has chosen one.</summary>
+    private void FollowCategoryFolder()
+    {
+        if (_saveFolderChosen) return;
+
+        string folder = UserPath.Shorten(_settingsService.Current.FolderFor(_fileNameTextBox.Text.Trim()));
+        if (_saveFolderTextBox.Text == folder) return;
+
+        _settingSaveFolder = true;
+        try { _saveFolderTextBox.Text = folder; }
+        finally { _settingSaveFolder = false; }
     }
 
     private void OnBrowseClicked()

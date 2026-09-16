@@ -50,6 +50,59 @@ public sealed class DownloadSettings
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "QuickByte");
 
     /// <summary>
+    /// File finished downloads away by kind — videos in one folder, installers in
+    /// another — the way IDM does. Off by default: where a user's files go is
+    /// theirs to decide, and one folder is what they had until they asked.
+    /// </summary>
+    public bool SortIntoCategoryFolders { get; set; }
+
+    /// <summary>
+    /// A folder chosen for a category, overriding the subfolder of
+    /// <see cref="DefaultDownloadFolder"/> it would otherwise get. Only read while
+    /// <see cref="SortIntoCategoryFolders"/> is on. Coalesced for the same reason
+    /// <see cref="DownloadItem.Headers"/> is: an explicit null in a hand-edited
+    /// file must not beat the initializer.
+    /// </summary>
+    public Dictionary<FileCategory, string> CategoryFolders
+    {
+        get => _categoryFolders;
+        set => _categoryFolders = value ?? new Dictionary<FileCategory, string>();
+    }
+
+    private Dictionary<FileCategory, string> _categoryFolders = new();
+
+    /// <summary>
+    /// Where a file of this name is saved unless the user says otherwise.
+    ///
+    /// With sorting on: the category's own folder if one is set, else a subfolder
+    /// named after the category. <see cref="FileCategory.Other"/> always lands in
+    /// the default folder — a subfolder called "Other" is not a place anyone looks.
+    /// A chosen folder that is not a full path is ignored: settings.json is
+    /// editable, and a relative path would resolve against wherever QuickByte
+    /// happened to be started from.
+    /// </summary>
+    public string FolderFor(string fileName)
+    {
+        if (!SortIntoCategoryFolders) return DefaultDownloadFolder;
+        return FolderFor(FileCategoryHelper.GetCategory(fileName));
+    }
+
+    /// <summary>The folder a category is saved to while sorting is on.</summary>
+    public string FolderFor(FileCategory category)
+    {
+        if (CategoryFolders.TryGetValue(category, out string? chosen)
+            && !string.IsNullOrWhiteSpace(chosen)
+            && Path.IsPathFullyQualified(chosen))
+            return chosen;
+
+        return DefaultCategoryFolder(category);
+    }
+
+    /// <summary>The subfolder a category gets when no folder has been chosen for it.</summary>
+    public string DefaultCategoryFolder(FileCategory category) =>
+        category == FileCategory.Other ? DefaultDownloadFolder : Path.Combine(DefaultDownloadFolder, category.ToString());
+
+    /// <summary>
     /// Folder used to store in-progress chunk (.part) files: <c>temp\</c>
     /// beside settings.json.
     /// </summary>

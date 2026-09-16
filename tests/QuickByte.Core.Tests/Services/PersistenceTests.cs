@@ -266,6 +266,33 @@ public sealed class SettingsServiceTests
     }
 
     [Fact]
+    public void Category_folders_survive_a_restart()
+    {
+        using var folder = new TempFolder();
+        var service = new SettingsService(folder.Path);
+        service.Load();
+
+        service.Save(new DownloadSettings
+        {
+            DefaultDownloadFolder = folder.Path,
+            SortIntoCategoryFolders = true,
+            CategoryFolders = new Dictionary<QuickByte.Core.Helpers.FileCategory, string>
+            {
+                [QuickByte.Core.Helpers.FileCategory.Video] = @"D:\Media\Videos"
+            }
+        });
+
+        var reopened = new SettingsService(folder.Path);
+        reopened.Load();
+
+        Assert.True(reopened.Current.SortIntoCategoryFolders);
+        Assert.Equal(@"D:\Media\Videos", reopened.Current.CategoryFolders[QuickByte.Core.Helpers.FileCategory.Video]);
+
+        // Stored by name, so reordering the enum can never move a folder.
+        Assert.Contains("\"Video\"", File.ReadAllText(Path.Combine(folder.Path, "settings.json")));
+    }
+
+    [Fact]
     public void Settings_round_trip()
     {
         using var folder = new TempFolder();

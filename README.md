@@ -800,6 +800,14 @@ Every window is styled after classic IDM, on a single flat palette defined in
   offered back, and nothing is listening at all until the option is on. It uses
   Windows' clipboard change notification rather than polling, which would hold
   the clipboard open and get in other programs' way.
+- **Category folders** (*Options > Folders*, off by default) — sort finished
+  files by kind: videos into `…\QuickByte\Video`, installers into `…\Programs`,
+  or into a folder chosen per category. Anything of no known kind stays in the
+  default folder. Add Download's and Batch Download's *Save to* follow the file
+  into its category folder until you change the box yourself. A chosen folder
+  that is not a full path — which only a hand-edited `settings.json` could
+  produce — is ignored rather than resolved against wherever the app started
+  (`DownloadSettings.FolderFor`).
 - **Sign In** — a small modal that appears only when a server answers a probe
   with a `401` or an FTP `530`. It names the host, repeats what the server
   said, and hands the login straight back to the fetch that was refused.

@@ -45,6 +45,10 @@ public sealed class BatchDownloadForm : Form
 
     private bool _checking;
 
+    /// <summary>Set once the user edits Save to; until then each file goes to its category's folder.</summary>
+    private bool _saveFolderChosen;
+    private bool _settingSaveFolder;
+
     /// <summary>The downloads to add, set only when the user confirms; its presence is the confirmation.</summary>
     public IReadOnlyList<DownloadRequest>? Results { get; private set; }
 
@@ -168,6 +172,9 @@ public sealed class BatchDownloadForm : Form
         layout.Controls.Add(FormChrome.FieldLabel("Save to"), 0, row);
         _saveFolderTextBox = FormChrome.Field();
         _saveFolderTextBox.Text = UserPath.Shorten(_settingsService.Current.DefaultDownloadFolder);
+        _saveFolderTextBox.TextChanged += (_, _) => { if (!_settingSaveFolder) _saveFolderChosen = true; };
+        if (_settingsService.Current.SortIntoCategoryFolders)
+            new ToolTip().SetToolTip(_saveFolderTextBox, "Each file goes to its category's folder unless you change this.");
         layout.Controls.Add(_saveFolderTextBox, 1, row);
         var browseButton = Theme.StyleButton(new Button { Text = "Browse…", Dock = DockStyle.Fill, Margin = new Padding(8, 4, 0, 4) });
         browseButton.Click += (_, _) => OnBrowseClicked();
@@ -396,7 +403,9 @@ public sealed class BatchDownloadForm : Form
             .OfType<BatchEntry>()
             .Where(entry => entry.Info is not null)
             .Select(entry => new DownloadRequest(
-                entry.Url, entry.Info!, folder, entry.Info!.FileName,
+                entry.Url, entry.Info!,
+                _saveFolderChosen ? folder : _settingsService.Current.FolderFor(entry.Info!.FileName),
+                entry.Info!.FileName,
                 entry.Info.SupportsRangeRequests ? _connectionsBox.Connections : 1)
             {
                 Credentials = entry.Credentials,

@@ -47,6 +47,8 @@ public sealed class SettingsForm : Form
     private CheckBox _autoOpenDetailsCheckBox = null!;
     private CheckBox _showCompletionCheckBox = null!;
     private CheckBox _monitorClipboardCheckBox = null!;
+    private CheckBox _sortByCategoryCheckBox = null!;
+    private readonly Dictionary<FileCategory, TextBox> _categoryFolderTextBoxes = new();
     private TextBox _clipboardTypesTextBox = null!;
     private CheckBox _startWithWindowsCheckBox = null!;
     private CheckBox _startMinimizedCheckBox = null!;
@@ -130,12 +132,88 @@ public sealed class SettingsForm : Form
     /// </summary>
     private void BuildFoldersTab(Panel page)
     {
-        var layout = NewGrid(page, rows: 2);
+        var layout = NewGrid(page, rows: 1);
+        layout.Dock = DockStyle.Top;
+        layout.Height = 62;
 
         _downloadFolderTextBox = AddFolderRow(layout, 0, "Default download folder", "Where finished files are saved.");
-        AddNoteRow(layout, 1,
-            "Add Download can send a single file elsewhere. Chunk files live with QuickByte's own "
-            + "data, where a cleanup tool cannot empty them mid-download.");
+
+        // The per-category rows are a tighter grid of their own, below the
+        // default folder: six rows at the 58 px the rest of Options uses would
+        // not fit on the page.
+        _sortByCategoryCheckBox = new CheckBox
+        {
+            Text = "Sort downloads into a folder for each kind of file",
+            AutoSize = true,
+            Font = Theme.Ui,
+            ForeColor = Theme.Text,
+            BackColor = Theme.Surface,
+            Dock = DockStyle.Top,
+            Padding = new Padding(0, 4, 0, 6)
+        };
+
+        var categories = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            ColumnCount = 3,
+            AutoSize = true,
+            BackColor = Theme.Surface
+        };
+        categories.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
+        categories.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        categories.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
+
+        int row = 0;
+        foreach (var category in Enum.GetValues<FileCategory>().Where(c => c != FileCategory.Other))
+        {
+            categories.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
+            categories.Controls.Add(FormChrome.FieldLabel(category.ToString()), 0, row);
+
+            var field = FormChrome.Field();
+            field.Margin = new Padding(0, 4, 8, 2);
+            categories.Controls.Add(field, 1, row);
+
+            var browse = Theme.StyleButton(new Button { Text = "Browse…", Anchor = AnchorStyles.Right, Margin = new Padding(0, 2, 0, 0) });
+            browse.Click += (_, _) => Browse(field);
+            categories.Controls.Add(browse, 2, row);
+
+            _categoryFolderTextBoxes[category] = field;
+            row++;
+        }
+
+        var note = new Label
+        {
+            Text = "Empty rows use a subfolder of the default folder; other files stay in it.",
+            Dock = DockStyle.Top,
+            Height = 40,
+            ForeColor = Theme.TextMuted,
+            Font = Theme.UiSmall,
+            Padding = new Padding(0, 8, 0, 0)
+        };
+
+        var lower = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Surface, Padding = new Padding(0, 0, 0, 0) };
+        lower.Controls.Add(note);
+        lower.Controls.Add(categories);
+        lower.Controls.Add(_sortByCategoryCheckBox);
+        page.Controls.Add(lower);
+        lower.BringToFront();
+
+        _sortByCategoryCheckBox.CheckedChanged += (_, _) => UpdateCategoryFolderFields();
+        _downloadFolderTextBox.TextChanged += (_, _) => UpdateCategoryFolderFields();
+    }
+
+    /// <summary>
+    /// Greys the category rows while sorting is off, and shows each empty one the
+    /// subfolder it would get — which moves when the default folder does.
+    /// </summary>
+    private void UpdateCategoryFolderFields()
+    {
+        var preview = new DownloadSettings { DefaultDownloadFolder = UserPath.Expand(_downloadFolderTextBox.Text) };
+        foreach (var (category, field) in _categoryFolderTextBoxes)
+        {
+            field.Enabled = _sortByCategoryCheckBox.Checked;
+            field.PlaceholderText = UserPath.Shorten(preview.DefaultCategoryFolder(category));
+        }
     }
 
     private void BuildInterfaceTab(Panel page)
@@ -477,6 +555,10 @@ public sealed class SettingsForm : Form
         // through UserPath.Expand in OnSaveClicked — see UserPath for why the
         // two halves have to stay together.
         _downloadFolderTextBox.Text = UserPath.Shorten(s.DefaultDownloadFolder);
+        _sortByCategoryCheckBox.Checked = s.SortIntoCategoryFolders;
+        foreach (var (category, field) in _categoryFolderTextBoxes)
+            field.Text = s.CategoryFolders.TryGetValue(category, out string? chosen) ? UserPath.Shorten(chosen) : string.Empty;
+        UpdateCategoryFolderFields();
         _autoOpenDetailsCheckBox.Checked = s.AutoOpenDetailsWindow;
         _showCompletionCheckBox.Checked = s.ShowCompletionWindow;
         _monitorClipboardCheckBox.Checked = s.MonitorClipboard;
@@ -540,6 +622,12 @@ public sealed class SettingsForm : Form
             // what Directory.CreateDirectory below is handed, and a literal "~"
             // reaching that makes a folder called "~" beside the executable.
             DefaultDownloadFolder = UserPath.Expand(_downloadFolderTextBox.Text),
+            SortIntoCategoryFolders = _sortByCategoryCheckBox.Checked,
+            // An empty row is "use the default subfolder", so only chosen ones
+            // are stored — and expanded, for the same reason as the folder above.
+            CategoryFolders = _categoryFolderTextBoxes
+                .Where(pair => !string.IsNullOrWhiteSpace(pair.Value.Text))
+                .ToDictionary(pair => pair.Key, pair => UserPath.Expand(pair.Value.Text.Trim())),
             AutoOpenDetailsWindow = _autoOpenDetailsCheckBox.Checked,
             ShowCompletionWindow = _showCompletionCheckBox.Checked,
             MonitorClipboard = _monitorClipboardCheckBox.Checked,
@@ -556,6 +644,14 @@ public sealed class SettingsForm : Form
             // No UI field — carried forward explicitly so it doesn't reset.
             StreamBufferSizeBytes = _settingsService.Current.StreamBufferSizeBytes
         };
+
+        var notAPath = updated.CategoryFolders.FirstOrDefault(pair => !Path.IsPathFullyQualified(pair.Value));
+        if (notAPath.Value is not null)
+        {
+            MessageBox.Show(this, $"The {notAPath.Key} folder has to be a full path, such as D:\\Videos.",
+                "Options", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
 
         try
         {
