@@ -69,6 +69,22 @@ public sealed class QueueManagerTests
     }
 
     [Fact]
+    public void Update_applies_what_the_queue_does_when_it_finishes()
+    {
+        using var fixture = new Fixture();
+        var queue = fixture.Manager.Create("Nightly");
+
+        var edited = queue.Clone();
+        edited.WhenFinished = PowerAction.ShutDown;
+        fixture.Manager.Update(edited);
+        Assert.Equal(PowerAction.ShutDown, fixture.Manager.Find(queue.Id)!.WhenFinished);
+
+        edited.WhenFinished = (PowerAction)77;
+        fixture.Manager.Update(edited);
+        Assert.Equal(PowerAction.None, fixture.Manager.Find(queue.Id)!.WhenFinished);
+    }
+
+    [Fact]
     public void Update_of_a_queue_that_is_gone_is_harmless()
     {
         using var fixture = new Fixture();
@@ -554,6 +570,7 @@ public sealed class QueueManagerTests
         public bool ChangeAddress(Guid downloadId, AddressChange change) => false;
         public long GlobalSpeedLimitBytesPerSecond => 0;
         public void SetSpeedLimit(Guid downloadId, long bytesPerSecond) { }
+        public void SetCompletionActions(Guid downloadId, CompletionActions actions, PowerAction power) { }
         public void SetGlobalSpeedLimit(long bytesPerSecond) { }
         public void LoadPersistedDownloads() { }
         public Task<int> CleanupOrphanedTempFoldersAsync() => Task.FromResult(0);

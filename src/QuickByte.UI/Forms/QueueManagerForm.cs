@@ -39,6 +39,7 @@ public sealed class QueueManagerForm : Form
     private TextBox _nameTextBox;
     private NumericUpDown _concurrentUpDown;
     private NumericUpDown _speedLimitUpDown;
+    private ComboBox _whenFinishedBox;
 
     private CheckBox _scheduleEnabledCheckBox;
     private readonly Dictionary<DayOfWeek, CheckBox> _dayCheckBoxes = new();
@@ -241,7 +242,7 @@ public sealed class QueueManagerForm : Form
 
     private void BuildOptionsTab(Panel page)
     {
-        var layout = NewGrid(page, rows: 3);
+        var layout = NewGrid(page, rows: 4);
         int row = 0;
 
         layout.Controls.Add(Caption("Queue name", "Shown in the sidebar and in the Add to queue menu."), 0, row);
@@ -257,10 +258,18 @@ public sealed class QueueManagerForm : Form
             "How many of this queue's files transfer together. The app-wide limit still applies.",
             DownloadQueue.MinConcurrentDownloads, DownloadQueue.MaxConcurrentDownloads);
 
-        _speedLimitUpDown = AddNumericRow(layout, row,
+        _speedLimitUpDown = AddNumericRow(layout, row++,
             "Queue speed limit (KB/s)",
             "Shared by this queue's downloads; 0 = no limit. Applies at once.",
             0, 1_000_000, increment: 50);
+
+        var whenFinished = Caption("When the queue finishes", "After every file is done.");
+        layout.Controls.Add(whenFinished, 0, row);
+        _whenFinishedBox = DownloadDetailsForm.PowerActionBox(PowerAction.None);
+        _whenFinishedBox.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        _whenFinishedBox.Margin = new Padding(0, 12, 0, 0);
+        layout.Controls.Add(_whenFinishedBox, 1, row);
+        layout.SetColumnSpan(_whenFinishedBox, 2);
     }
 
     private void BuildScheduleTab(Panel page)
@@ -420,6 +429,7 @@ public sealed class QueueManagerForm : Form
 
         _concurrentUpDown.ValueChanged += (_, _) => ApplyEdits();
         _speedLimitUpDown.ValueChanged += (_, _) => ApplyEdits();
+        _whenFinishedBox.SelectedIndexChanged += (_, _) => ApplyEdits();
         _scheduleEnabledCheckBox.CheckedChanged += (_, _) => ApplyEdits();
         _stopAtCheckBox.CheckedChanged += (_, _) => ApplyEdits();
         _startTimePicker.ValueChanged += (_, _) => ApplyEdits();
@@ -576,6 +586,7 @@ public sealed class QueueManagerForm : Form
             _speedLimitUpDown.Value = has
                 ? Math.Clamp(queue.SpeedLimitBytesPerSecond / ByteFormatter.BytesPerKilobyte, 0, 1_000_000)
                 : 0;
+            _whenFinishedBox.SelectedItem = has ? CompletionPlan.Defined(queue.WhenFinished) : PowerAction.None;
 
             var schedule = has ? queue.Schedule : new QueueSchedule();
             _scheduleEnabledCheckBox.Checked = schedule.Enabled;
@@ -620,6 +631,7 @@ public sealed class QueueManagerForm : Form
         queue.Name = _nameTextBox.Text;
         queue.ConcurrentDownloads = (int)_concurrentUpDown.Value;
         queue.SpeedLimitBytesPerSecond = (long)_speedLimitUpDown.Value * ByteFormatter.BytesPerKilobyte;
+        queue.WhenFinished = _whenFinishedBox.SelectedItem is PowerAction action ? action : PowerAction.None;
         queue.Schedule = new QueueSchedule
         {
             Enabled = _scheduleEnabledCheckBox.Checked,
@@ -793,6 +805,7 @@ public sealed class QueueManagerForm : Form
         _nameTextBox.Enabled = hasQueue;
         _concurrentUpDown.Enabled = hasQueue;
         _speedLimitUpDown.Enabled = hasQueue;
+        _whenFinishedBox.Enabled = hasQueue;
         _scheduleEnabledCheckBox.Enabled = hasQueue;
         _stopAtCheckBox.Enabled = hasQueue;
         _startTimePicker.Enabled = hasQueue && _scheduleEnabledCheckBox.Checked;

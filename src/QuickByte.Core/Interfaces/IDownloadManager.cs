@@ -1,3 +1,4 @@
+using QuickByte.Core.Enums;
 using QuickByte.Core.Events;
 using QuickByte.Core.Models;
 
@@ -61,6 +62,13 @@ public interface IDownloadManager
     /// the limiter is a live object rather than a snapshotted setting.
     /// </summary>
     void SetSpeedLimit(Guid downloadId, long bytesPerSecond);
+
+    /// <summary>
+    /// Sets what happens when a download finishes — its folder opened, a sound,
+    /// and what to do with the computer — and persists it on the item, so it holds
+    /// whether or not its details window is still open when the moment comes.
+    /// </summary>
+    void SetCompletionActions(Guid downloadId, CompletionActions actions, PowerAction power);
 
     /// <summary>
     /// Caps one download at the rate its <em>queue</em> allows (0 lifts the cap),

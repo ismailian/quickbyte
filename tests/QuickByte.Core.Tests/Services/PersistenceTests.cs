@@ -102,6 +102,22 @@ public sealed class DownloadRepositoryTests
     }
 
     [Fact]
+    public void What_a_download_does_when_it_finishes_survives_a_restart()
+    {
+        using var folder = new TempFolder();
+        var repository = new DownloadRepository(folder.Path);
+        repository.SaveAll(new[]
+        {
+            new DownloadItem { OnCompletion = CompletionActions.OpenFolder, PowerActionWhenDone = PowerAction.ShutDown }
+        });
+
+        var restored = repository.LoadAll().Single();
+
+        Assert.Equal(CompletionActions.OpenFolder, restored.OnCompletion);
+        Assert.Equal(PowerAction.ShutDown, restored.PowerActionWhenDone);
+    }
+
+    [Fact]
     public void A_corrupt_file_loads_as_empty_rather_than_throwing()
     {
         using var folder = new TempFolder();
@@ -145,6 +161,7 @@ public sealed class QueueRepositoryTests
             Name = "Nightly",
             ConcurrentDownloads = 4,
             SpeedLimitBytesPerSecond = 500_000,
+            WhenFinished = PowerAction.Hibernate,
             Schedule = new QueueSchedule
             {
                 Enabled = true,
@@ -162,6 +179,7 @@ public sealed class QueueRepositoryTests
         Assert.Equal("Nightly", restored.Name);
         Assert.Equal(4, restored.ConcurrentDownloads);
         Assert.Equal(500_000, restored.SpeedLimitBytesPerSecond);
+        Assert.Equal(PowerAction.Hibernate, restored.WhenFinished);
         Assert.Equal(ScheduleDays.Weekdays, restored.Schedule.Days);
         Assert.Equal(TimeSpan.FromHours(2), restored.Schedule.StartTime);
         Assert.True(restored.Schedule.StopAtEnabled);

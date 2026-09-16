@@ -58,7 +58,6 @@ public sealed class DownloadDetailsForm : Form
     private Button _retryButton = null!;
     private Button _openFolderButton = null!;
     private bool _detailsExpanded = false;
-    private bool _openOnCompleteRequested;
 
     public DownloadDetailsForm(DownloadItem item, IDownloadManager downloadManager)
     {
@@ -402,26 +401,81 @@ public sealed class DownloadDetailsForm : Form
             BackColor = Theme.Surface
         };
 
-        var openFolderCheckBox = StyleCheckBox(new CheckBox { Text = "Open the containing folder when the download completes" });
-        var exitCheckBox = StyleCheckBox(new CheckBox { Text = "Exit QuickByte when the download completes", Enabled = false });
-        var soundCheckBox = StyleCheckBox(new CheckBox { Text = "Play a sound when the download completes", Enabled = false });
+        var openFolderCheckBox = StyleCheckBox(new CheckBox
+        {
+            Text = "Open the containing folder when the download completes",
+            Checked = _item.OnCompletion.HasFlag(CompletionActions.OpenFolder)
+        });
+        var soundCheckBox = StyleCheckBox(new CheckBox
+        {
+            Text = "Play a sound when the download completes",
+            Checked = _item.OnCompletion.HasFlag(CompletionActions.PlaySound)
+        });
 
-        openFolderCheckBox.CheckedChanged += (_, _) => _openOnCompleteRequested = openFolderCheckBox.Checked;
+        var powerCaption = new Label
+        {
+            Text = "When the download completes",
+            AutoSize = true,
+            ForeColor = Theme.Text,
+            Font = Theme.Ui,
+            Margin = new Padding(0, 12, 0, 4)
+        };
+        var powerBox = PowerActionBox(_item.PowerActionWhenDone);
 
         var note = new Label
         {
-            Text = "Greyed-out options are placeholders and are not wired up yet.",
+            Text = "Kept with the download, so they apply even if this window is closed.",
             AutoSize = true,
+            MaximumSize = new Size(520, 0),
             ForeColor = Theme.TextMuted,
             Font = Theme.UiSmall,
-            Margin = new Padding(0, 18, 0, 0)
+            Margin = new Padding(0, 14, 0, 0)
         };
 
+        // Persisted through the manager on every change rather than held here:
+        // this window closes the moment the download completes, which is exactly
+        // when these are read.
+        void Save()
+        {
+            var actions = CompletionActions.None;
+            if (openFolderCheckBox.Checked) actions |= CompletionActions.OpenFolder;
+            if (soundCheckBox.Checked) actions |= CompletionActions.PlaySound;
+            _downloadManager.SetCompletionActions(_item.Id, actions, (PowerAction)powerBox.SelectedItem!);
+        }
+
+        openFolderCheckBox.CheckedChanged += (_, _) => Save();
+        soundCheckBox.CheckedChanged += (_, _) => Save();
+        powerBox.SelectedIndexChanged += (_, _) => Save();
+
         stack.Controls.Add(openFolderCheckBox);
-        stack.Controls.Add(exitCheckBox);
         stack.Controls.Add(soundCheckBox);
+        stack.Controls.Add(powerCaption);
+        stack.Controls.Add(powerBox);
         stack.Controls.Add(note);
         page.Controls.Add(stack);
+    }
+
+    /// <summary>A drop-down of every <see cref="PowerAction"/>, showing its label and starting on <paramref name="selected"/>.</summary>
+    internal static ComboBox PowerActionBox(PowerAction selected)
+    {
+        var box = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Theme.Surface,
+            ForeColor = Theme.Text,
+            Font = Theme.Ui,
+            Width = 240,
+            Margin = new Padding(0, 0, 0, 0),
+
+            // Without it the Format handler below is never consulted, and the
+            // list shows enum names like "ShutDown".
+            FormattingEnabled = true
+        };
+        box.Format += (_, e) => e.Value = PowerActions.Label((PowerAction)e.ListItem!);
+        foreach (var action in PowerActions.All) box.Items.Add(action);
+        box.SelectedItem = PowerActions.All.Contains(selected) ? selected : PowerAction.None;
+        return box;
     }
 
     private static CheckBox StyleCheckBox(CheckBox box)
@@ -594,8 +648,6 @@ public sealed class DownloadDetailsForm : Form
             _toolTip.SetToolTip(_statusValueLabel, e.ErrorMessage);
         }
 
-        if (e.NewStatus == DownloadStatus.Completed && _openOnCompleteRequested)
-            FileLauncher.RevealInExplorer(_item.FullPath, _item.SaveFolder);
     }
 
     private void OnConnectionsChanged(object? sender, ConnectionsSnapshotEventArgs e)

@@ -130,6 +130,7 @@ public sealed class QueueManager : IQueueManager
             queue.ConcurrentDownloads = Math.Clamp(
                 edited.ConcurrentDownloads, DownloadQueue.MinConcurrentDownloads, DownloadQueue.MaxConcurrentDownloads);
             queue.SpeedLimitBytesPerSecond = Math.Max(0, edited.SpeedLimitBytesPerSecond);
+            queue.WhenFinished = CompletionPlan.Defined(edited.WhenFinished);
             queue.Schedule = edited.Schedule.Clone();
             speedLimit = queue.SpeedLimitBytesPerSecond;
 

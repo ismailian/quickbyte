@@ -41,6 +41,14 @@ public sealed class DownloadQueue
     /// </summary>
     public long SpeedLimitBytesPerSecond { get; set; }
 
+    /// <summary>
+    /// What to do once a run has worked through every file — typically shut down
+    /// or sleep after a night's downloading. A property of the queue rather than of
+    /// one run, so a schedule set for every night keeps doing it; only a run that
+    /// drains the queue triggers it (see <see cref="Helpers.CompletionPlan.ForQueue"/>).
+    /// </summary>
+    public PowerAction WhenFinished { get; set; }
+
     /// <remarks>
     /// The setter coalesces for the same reason <see cref="DownloadItem.Headers"/>
     /// does: an explicit <c>"Schedule": null</c> in a hand-edited or
@@ -105,6 +113,7 @@ public sealed class DownloadQueue
         Name = Name,
         ConcurrentDownloads = ConcurrentDownloads,
         SpeedLimitBytesPerSecond = SpeedLimitBytesPerSecond,
+        WhenFinished = WhenFinished,
         Schedule = Schedule.Clone(),
         ItemIds = new List<Guid>(ItemIds),
         LastRunAt = LastRunAt,

@@ -88,10 +88,11 @@ public sealed class DownloadQueueTests
     [Fact]
     public void Clone_gives_an_editor_a_copy_that_is_not_already_live()
     {
-        var original = new DownloadQueue { Name = "Nightly", ConcurrentDownloads = 3 };
+        var original = new DownloadQueue { Name = "Nightly", ConcurrentDownloads = 3, WhenFinished = PowerAction.Sleep };
         original.ItemIds.Add(Guid.NewGuid());
 
         var copy = original.Clone();
+        Assert.Equal(PowerAction.Sleep, copy.WhenFinished);
         copy.Name = "Edited";
         copy.ItemIds.Add(Guid.NewGuid());
         copy.Schedule.Enabled = true;

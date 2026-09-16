@@ -191,6 +191,32 @@ public sealed class DownloadManagerTests
     }
 
     [Fact]
+    public async Task What_happens_on_completion_is_persisted_with_the_download()
+    {
+        // Its details window closes the moment the download completes, which is
+        // exactly when these are read.
+        using var fixture = new Fixture();
+        var item = await fixture.AddAsync(startImmediately: false);
+
+        fixture.Manager.SetCompletionActions(item.Id, CompletionActions.PlaySound | (CompletionActions)64, PowerAction.Hibernate);
+
+        var saved = fixture.Repository.LastSaved.Single();
+        Assert.Equal(CompletionActions.PlaySound, saved.OnCompletion);
+        Assert.Equal(PowerAction.Hibernate, saved.PowerActionWhenDone);
+    }
+
+    [Fact]
+    public async Task A_power_action_that_does_not_exist_is_stored_as_none()
+    {
+        using var fixture = new Fixture();
+        var item = await fixture.AddAsync(startImmediately: false);
+
+        fixture.Manager.SetCompletionActions(item.Id, CompletionActions.None, (PowerAction)99);
+
+        Assert.Equal(PowerAction.None, item.PowerActionWhenDone);
+    }
+
+    [Fact]
     public async Task A_negative_speed_limit_is_read_as_unlimited()
     {
         using var fixture = new Fixture();

@@ -145,6 +145,13 @@ public sealed class MainForm : Form
     /// </summary>
     private bool _exiting;
 
+    /// <summary>
+    /// The countdown in front of a power action, while one is on screen. Only one at
+    /// a time: a queue draining the moment its last download completes asks twice
+    /// for what is one decision.
+    /// </summary>
+    private PowerActionCountdownForm? _powerCountdown;
+
     /// <summary>Startup update check state — see <see cref="OnShown"/> and <see cref="ShowUpdateWindow"/>.</summary>
     private bool _startupUpdateCheckDone;
     private bool _updateWindowOpen;
@@ -981,6 +988,7 @@ public sealed class MainForm : Form
         _downloadManager.ProgressChanged += OnProgressChanged;
         _downloadManager.StatusChanged += OnStatusChanged;
         _queueManager.QueuesChanged += OnQueuesChanged;
+        _queueManager.QueueStateChanged += OnQueueStateChanged;
 
         FormClosed += (_, _) =>
         {
@@ -988,6 +996,7 @@ public sealed class MainForm : Form
             _downloadManager.ProgressChanged -= OnProgressChanged;
             _downloadManager.StatusChanged -= OnStatusChanged;
             _queueManager.QueuesChanged -= OnQueuesChanged;
+            _queueManager.QueueStateChanged -= OnQueueStateChanged;
         };
     }
 
@@ -1079,10 +1088,61 @@ public sealed class MainForm : Form
         if (_openDetailForms.Remove(item.Id, out var detailsForm))
             detailsForm.Close();
 
-        if (!_settingsService.Current.ShowCompletionWindow) return;
+        var plan = CompletionPlan.ForDownload(item, _downloadManager.Downloads);
+        if (plan.RevealFolder) FileLauncher.RevealInExplorer(item.FullPath, item.SaveFolder);
+        if (plan.PlaySound) System.Media.SystemSounds.Asterisk.Play();
 
-        var completeForm = new DownloadCompleteForm(item, _settingsService);
-        ShowIndependently(completeForm);
+        if (_settingsService.Current.ShowCompletionWindow)
+            ShowIndependently(new DownloadCompleteForm(item, _settingsService));
+
+        if (plan.HasPowerAction)
+            StartPowerCountdown(plan, $"{item.FileName} finished downloading");
+    }
+
+    /// <summary>A queue's run ended. If it worked through every file, whatever the queue asked for next happens.</summary>
+    private void OnQueueStateChanged(object sender, QueueStateChangedEventArgs e)
+    {
+        if (e.State != QueueState.Idle || _queueManager.Find(e.QueueId) is not { } queue) return;
+
+        var plan = CompletionPlan.ForQueue(queue, e.Drained, _downloadManager.Downloads);
+        if (plan.HasPowerAction)
+            StartPowerCountdown(plan, $"Queue \"{queue.Name}\" finished");
+    }
+
+    /// <summary>
+    /// Puts the countdown up for a power action, and carries the action out if
+    /// nobody cancels it. Downloads still running are paused first — sleeping on
+    /// top of open connections leaves them to time out into failures — and exiting
+    /// goes through <see cref="ExitApplication"/>, which pauses them itself.
+    /// </summary>
+    private void StartPowerCountdown(CompletionPlan plan, string reason)
+    {
+        if (_powerCountdown is not null) return;
+
+        var countdown = new PowerActionCountdownForm(plan.Power, reason, plan.StillRunning);
+        _powerCountdown = countdown;
+        countdown.FormClosed += (_, _) =>
+        {
+            _powerCountdown = null;
+            if (!countdown.Confirmed) return;
+
+            if (countdown.Action == PowerAction.ExitApp)
+            {
+                ExitApplication();
+                return;
+            }
+
+            PauseEverything();
+            if (!PowerActions.Perform(countdown.Action))
+            {
+                MessageBox.Show(this,
+                    $"Windows did not let QuickByte {PowerActions.Verb(countdown.Action)}.",
+                    "QuickByte", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        };
+
+        System.Media.SystemSounds.Exclamation.Play();
+        ShowIndependently(countdown);
     }
 
     // --------------------------------------------------------------- Rows --

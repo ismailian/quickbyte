@@ -344,6 +344,24 @@ The one thing this cannot do is *wake a sleeping machine* — that needs a Task
 Scheduler task with a wake trigger. A queue scheduled while the machine is
 asleep starts when it wakes, if that is within the schedule's window.
 
+**When a queue finishes.** A queue's Options tab also says what to do once a
+run has worked through every file: nothing, exit QuickByte, sleep, hibernate or
+shut down — the other half of "fetch these overnight". It is a property of the
+queue, so a schedule set for every night keeps doing it, and only a run that
+*drains* the queue triggers it: one the user stopped, or one its own stop time
+cut short with files left, does not. A single download can ask for the same
+from its details window's **Options on completion** tab, beside opening its
+folder and playing a sound; those choices are persisted on the item, so they
+apply whether or not the window is still open.
+
+Nothing turns a computer off without a countdown first — a minute for sleep,
+hibernate and shut down, fifteen seconds to exit — with **Cancel** as the
+default button, and a note of how many other downloads are still running and
+will be paused. Sleep and hibernate go through WinForms'
+`Application.SetSuspendState`; shutting down runs Windows' own `shutdown.exe`
+from the system directory, by full path, without `/f`, so an app with unsaved
+work still gets to object.
+
 **In the UI.** The sidebar's **Queues** branch lists every queue with its file
 count and filters the list to it. **Tasks > Queues & Scheduler** (and the
 toolbar's Queues button) opens the queue window: queues on the left, and for the
@@ -731,7 +749,8 @@ Every window is styled after classic IDM, on a single flat palette defined in
   menu on each row, and a status bar showing download counts and aggregate
   speed.
 - **Download details window** — opens automatically when a download starts.
-  Three tabs (Download status, **Speed Limiter**, Options on completion). The
+  Three tabs (Download status, **Speed Limiter**, **Options on completion** — open
+  the folder, play a sound, and exit / sleep / hibernate / shut down). The
   Speed Limiter tab caps this download in KB/s and applies the moment it is
   changed, including to a transfer already in flight. The
   Download status tab shows the file/URL header, the

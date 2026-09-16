@@ -107,6 +107,15 @@ public sealed class DownloadManager : IDownloadManager
         PersistAll();
     }
 
+    public void SetCompletionActions(Guid downloadId, CompletionActions actions, PowerAction power)
+    {
+        if (!_items.TryGetValue(downloadId, out var item)) return;
+
+        item.OnCompletion = actions & (CompletionActions.OpenFolder | CompletionActions.PlaySound);
+        item.PowerActionWhenDone = CompletionPlan.Defined(power);
+        PersistAll();
+    }
+
     public void LoadPersistedDownloads()
     {
         foreach (var item in _repository.LoadAll())

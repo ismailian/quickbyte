@@ -63,6 +63,17 @@ public sealed class DownloadItem
     /// </summary>
     public long SpeedLimitBytesPerSecond { get; set; }
 
+    /// <summary>
+    /// What to do for the user when this download finishes — open its folder, play
+    /// a sound. Persisted rather than held by the details window that sets it: that
+    /// window closes the moment the download completes, and it may well have been
+    /// closed hours before.
+    /// </summary>
+    public CompletionActions OnCompletion { get; set; }
+
+    /// <summary>What to do with the computer when this download finishes. One-shot by nature: it only finishes once.</summary>
+    public PowerAction PowerActionWhenDone { get; set; }
+
     public DownloadStatus Status { get; set; } = DownloadStatus.Queued;
     public string? ErrorMessage { get; set; }
 
