@@ -58,6 +58,16 @@ public sealed class MainForm : Form
     private ToolStripStatusLabel _speedLabel = null!;
     private Func<DownloadItem, bool>? _activeFilter;
 
+    /// <summary>The search box in the toolbar, and the words currently searched for.</summary>
+    private ToolStripTextBox _searchBox = null!;
+    private IReadOnlyList<string> _searchTerms = Array.Empty<string>();
+
+    /// <summary>
+    /// Waits for a pause in typing before re-filtering: every filter rebuilds the
+    /// visible rows, and doing that per keystroke on a long list is felt.
+    /// </summary>
+    private readonly System.Windows.Forms.Timer _searchDelay = new() { Interval = 180 };
+
     private ToolStripButton _resumeButton = null!;
     private ToolStripButton _pauseButton = null!;
     private ToolStripButton _stopAllButton = null!;
@@ -189,6 +199,7 @@ public sealed class MainForm : Form
         UpdateCommandStates();
 
         _animationTimer.Tick += (_, _) => OnAnimationTick();
+        FormClosed += (_, _) => _searchDelay.Dispose();
         _clipboardWatcher.Changed += (_, _) => OnClipboardChanged();
         SyncClipboardWatcher();
         FormClosed += (_, _) =>
@@ -515,6 +526,46 @@ public sealed class MainForm : Form
         var queuesButton = MakeButton("Queues", IconFactory.Queue(28), (_, _) => OnQueuesClicked(), "Queues and scheduler");
         var settingsButton = MakeButton("Options", IconFactory.Settings(28), (_, _) => OnSettingsClicked());
 
+        _searchBox = new ToolStripTextBox
+        {
+            Alignment = ToolStripItemAlignment.Right,
+            AutoSize = false,
+            Width = 220,
+            Font = Theme.Ui,
+            Margin = new Padding(0, 14, 8, 0),
+            BorderStyle = BorderStyle.FixedSingle,
+            ToolTipText = "Search file names and addresses (Ctrl+F)"
+        };
+        _searchBox.TextBox.PlaceholderText = "Search downloads  (Ctrl+F)";
+        _searchBox.TextChanged += (_, _) =>
+        {
+            _searchDelay.Stop();
+            _searchDelay.Start();
+        };
+        _searchBox.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Escape)
+            {
+                _searchBox.Clear();
+                ApplySearch();
+                _listView.Focus();
+                e.SuppressKeyPress = true;
+            }
+            else if (e.KeyCode is Keys.Enter or Keys.Down)
+            {
+                // Straight into the results: apply now, and hand the keyboard to the list.
+                ApplySearch();
+                _listView.Focus();
+                if (_listView.Items.Count > 0 && _listView.SelectedItems.Count == 0)
+                {
+                    _listView.Items[0].Selected = true;
+                    _listView.Items[0].Focused = true;
+                }
+                e.SuppressKeyPress = true;
+            }
+        };
+        _searchDelay.Tick += (_, _) => ApplySearch();
+
         var strip = new ToolStrip
         {
             ImageScalingSize = new Size(28, 28),
@@ -530,7 +581,8 @@ public sealed class MainForm : Form
             addButton, new ToolStripSeparator(),
             _resumeButton, _pauseButton, _stopAllButton, new ToolStripSeparator(),
             _deleteButton, _deleteCompletedButton, new ToolStripSeparator(),
-            _propertiesButton, queuesButton, settingsButton
+            _propertiesButton, queuesButton, settingsButton,
+            _searchBox
         });
         return strip;
     }
@@ -1213,7 +1265,39 @@ public sealed class MainForm : Form
         return string.IsNullOrEmpty(item.ContentType) ? "—" : item.ContentType;
     }
 
-    private bool PassesFilter(DownloadItem item) => _activeFilter is null || _activeFilter(item);
+    private bool PassesFilter(DownloadItem item) =>
+        (_activeFilter is null || _activeFilter(item)) && DownloadSearch.Matches(item, _searchTerms);
+
+    /// <summary>Filters the list by what is in the search box, combined with the sidebar's own filter.</summary>
+    private void ApplySearch()
+    {
+        _searchDelay.Stop();
+        var terms = DownloadSearch.Terms(_searchBox.Text);
+        if (terms.SequenceEqual(_searchTerms)) return;
+
+        _searchTerms = terms;
+        ApplyFilter();
+        UpdateCommandStates();
+    }
+
+    /// <summary>
+    /// Ctrl+F puts the cursor in the search box, and Ctrl+N opens Add Download — the
+    /// shortcut the toolbar's tooltip has always promised.
+    /// </summary>
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        switch (keyData)
+        {
+            case Keys.Control | Keys.F:
+                _searchBox.Focus();
+                _searchBox.SelectAll();
+                return true;
+            case Keys.Control | Keys.N:
+                OnAddDownloadClicked();
+                return true;
+        }
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
 
     /// <summary>
     /// Adds/removes a single row instead of rebuilding the whole list when one

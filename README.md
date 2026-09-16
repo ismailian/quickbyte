@@ -821,6 +821,13 @@ Every window is styled after classic IDM, on a single flat palette defined in
   `sha256sum` line with the file name after it, BSD's `SHA256 (file) = …` — and
   says plainly that MD5 and SHA-1 prove a file arrived intact but not that
   nobody forged it (`FileChecksum`).
+- **Search** — the box at the right of the toolbar (Ctrl+F) filters the list
+  as you type, on top of whatever the sidebar has selected. Every word has to
+  appear in the file name or the address's host and path, in any order and
+  case (`DownloadSearch`); a signed link's query string is left out, since its
+  random tokens would match almost anything. Enter or Down moves into the
+  results, Esc clears. Ctrl+N — promised by the Add URL tooltip all along —
+  now opens Add Download.
 - **Sign In** — a small modal that appears only when a server answers a probe
   with a `401` or an FTP `530`. It names the host, repeats what the server
   said, and hands the login straight back to the fetch that was refused.
