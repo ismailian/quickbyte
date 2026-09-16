@@ -650,10 +650,11 @@ credentials are kept either way, encrypted.
 ## Browser integration
 
 `BrowserIntegrationServer` (Core) listens on **127.0.0.1** and answers two
-routes: `GET /ping` and `POST /download`. The Chrome extension in
-`browser/chrome-extension/` cancels a download Chrome is about to start and
-posts it here instead, along with the cookies, referrer and user agent Chrome
-would have used — which is usually the only reason a link from behind a login
+routes: `GET /ping` and `POST /download`. The extension in
+`browser/chrome-extension/` — one set of scripts for **Chrome, Edge and
+Firefox**, packaged for each by `browser/package-extension.ps1` — cancels a
+download the browser is about to start and posts it here instead, along with
+the cookies, referrer and user agent the browser would have used — which is usually the only reason a link from behind a login
 resolves to a file rather than a sign-in page. `MainForm` opens the Add
 Download dialog pre-filled and already fetching.
 

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "QuickByte Integration",
-  "version": "1.4.2",
-  "description": "Takes downloads over from Chrome and hands them to the QuickByte download manager.",
+  "version": "1.5.0",
+  "description": "Takes downloads over from your browser and hands them to the QuickByte download manager.",
 
   "icons": {
     "16": "icons/icon16.png",

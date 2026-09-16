@@ -1,6 +1,6 @@
-# QuickByte Integration (Chrome extension)
+# QuickByte Integration (Chrome, Edge and Firefox extension)
 
-Takes downloads over from Chrome and hands them to QuickByte, the way IDM's
+Takes downloads over from the browser and hands them to QuickByte, the way IDM's
 browser integration does. Clicking a direct download link opens QuickByte's Add
 Download window instead of dropping the file into Chrome's downloads folder.
 
@@ -24,6 +24,37 @@ Chrome ignores `--load-extension` from the command line as of Chrome 137, so
 Load unpacked is the only way in. Chrome will also periodically offer to disable
 developer-mode extensions; that nag goes away once it is installed from the
 store.
+
+## Other browsers
+
+The same extension runs in **Microsoft Edge** and **Firefox**.
+
+- **Edge** is Chromium: the Chrome package works unchanged. To develop on it,
+  open `edge://extensions`, turn on **Developer mode**, and **Load unpacked**
+  this folder. Once the Chrome listing exists, QuickByte's installer offers it to
+  Edge too (see `STORE.md`); it can also be published to Edge Add-ons.
+- **Firefox** needs its own manifest — background scripts instead of a service
+  worker, and an add-on ID — kept beside Chrome's as `manifest.firefox.json`.
+  Run `browser\package-extension.ps1`, then in `about:debugging` →
+  **This Firefox** → **Load Temporary Add-on…** pick
+  `browser\dist\firefox\manifest.json`. Firefox does not grant an extension its
+  sites at install: the options page shows **Allow access** until you do, and
+  nothing is captured before that.
+
+Every script reaches the browser through one name, `qbApi` (in `shared.js`) —
+Firefox's promise-based `browser`, or `chrome` — and always as a promise, never
+with a callback. `ExtensionPackageTests` fails the build on a direct `chrome.`
+call, a callback, or the two manifests drifting apart.
+
+## Tests
+
+```
+node --test "browser/tests/*.test.mjs"
+```
+
+covers the capture rules, the namespace choice, site access and the settings
+migration. The package itself — manifests, packaged files, the namespace rule —
+is checked by `ExtensionPackageTests` in the ordinary `dotnet test` run.
 
 ## Pair it with QuickByte
 
@@ -108,4 +139,6 @@ tab reads as broken rather than as installed.
 - **"The token box is empty"** — the paste didn't land in the field. Click into
   the box, paste, and press Test connection again.
 - **Downloads still go to Chrome** — the file's extension probably isn't in the
-  list. Add it, or switch to *Every download Chrome starts*.
+  list. Add it, or switch to *Every download the browser starts*.
+- **Firefox: nothing happens at all** — the extension has not been allowed on
+  websites yet. Open its options and press **Allow access**.

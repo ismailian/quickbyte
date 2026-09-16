@@ -1,5 +1,6 @@
-// Service worker: decides which downloads QuickByte should take over, gathers
-// the request context Chrome would have used, and posts it to the loopback
+// Background script (a service worker in Chrome and Edge, an event page in
+// Firefox): decides which downloads QuickByte should take over, gathers the
+// request context the browser would have used, and posts it to the loopback
 // bridge (BrowserIntegrationServer in QuickByte.Core).
 //
 // Two capture paths, because they catch different things:
@@ -16,7 +17,9 @@
 // Chrome download is only cancelled once it has accepted. A bridge that is
 // down (QuickByte not running) must leave the browser's own download alone.
 
-importScripts("shared.js");
+// Chrome's service worker loads the shared file itself. Firefox has no
+// importScripts in a background script; its manifest lists shared.js first.
+if (typeof importScripts === "function") importScripts("shared.js");
 
 /** Anything slower than this and Chrome is left waiting on a filename. */
 const BRIDGE_TIMEOUT_MS = 3000;
@@ -56,7 +59,7 @@ async function bridgeRequest(path, body) {
  */
 async function cookieHeaderFor(url) {
   try {
-    const cookies = await chrome.cookies.getAll({ url });
+    const cookies = await qbApi.cookies.getAll({ url });
     return cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
   } catch {
     return ""; // No host permission for this site, or an opaque origin.
@@ -87,11 +90,11 @@ let badgeTimer = null;
  * confirmation, not news, and QuickByte's own window is about to open anyway.
  */
 function flashBadge(text, color) {
-  chrome.action.setBadgeBackgroundColor({ color });
-  chrome.action.setBadgeText({ text });
+  qbApi.action.setBadgeBackgroundColor({ color });
+  qbApi.action.setBadgeText({ text });
 
   clearTimeout(badgeTimer);
-  badgeTimer = setTimeout(() => chrome.action.setBadgeText({ text: "" }), 2000);
+  badgeTimer = setTimeout(() => qbApi.action.setBadgeText({ text: "" }), 2000);
 }
 
 function reportFailure(error) {
@@ -131,20 +134,20 @@ async function takeOverChromeDownload(item) {
 
 async function cancelChromeDownload(id) {
   try {
-    await chrome.downloads.cancel(id);
+    await qbApi.downloads.cancel(id);
   } catch {
     // Already finished or already gone. Nothing to undo.
   }
 
   try {
-    await chrome.downloads.erase({ id });
+    await qbApi.downloads.erase({ id });
   } catch {
     // Leaving the row in the download list is cosmetic; not worth reporting.
   }
 }
 
-if (chrome.downloads.onDeterminingFilename) {
-  chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
+if (qbApi.downloads.onDeterminingFilename) {
+  qbApi.downloads.onDeterminingFilename.addListener((item, suggest) => {
     (async () => {
       try {
         if (await takeOverChromeDownload(item)) await cancelChromeDownload(item.id);
@@ -166,7 +169,7 @@ if (chrome.downloads.onDeterminingFilename) {
   // Firefox and friends have no onDeterminingFilename. onCreated fires earlier
   // and usually without a filename, so the hand-off leans on QuickByte's own
   // probe to name the file.
-  chrome.downloads.onCreated.addListener(async (item) => {
+  qbApi.downloads.onCreated.addListener(async (item) => {
     try {
       if (await takeOverChromeDownload(item)) await cancelChromeDownload(item.id);
     } catch (error) {
@@ -177,7 +180,7 @@ if (chrome.downloads.onDeterminingFilename) {
 
 // ----------------------------------------------------------- content hook --
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+qbApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "qb-capture") {
     sendToQuickByte({
       url: message.url,
@@ -211,15 +214,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // ------------------------------------------------------------ context menu --
 
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({
+qbApi.runtime.onInstalled.addListener(() => {
+  qbApi.contextMenus.create({
     id: "quickbyte-download",
     title: "Download with QuickByte",
     contexts: ["link", "image", "video", "audio"]
   });
 });
 
-chrome.contextMenus.onClicked.addListener((info, tab) => {
+qbApi.contextMenus.onClicked.addListener((info, tab) => {
   // srcUrl before linkUrl for media: right-clicking a <video> inside an <a>
   // should offer the video, not the page it links to.
   const url = info.linkUrl || info.srcUrl;

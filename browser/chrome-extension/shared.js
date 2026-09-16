@@ -1,6 +1,38 @@
-// Settings and URL rules shared by the service worker, the options page and the
-// popup. Loaded with importScripts() in the worker and with a <script> tag in
-// the two pages, so everything here has to be plain globals — no modules.
+// Settings and URL rules shared by the background script, the options page, the
+// popup and the content script. Loaded with importScripts() in Chrome's service
+// worker, as a background script in Firefox, and with a <script> tag in the two
+// pages, so everything here has to be plain globals — no modules.
+
+// One extension, three browsers. Firefox names the extension API `browser`;
+// Chrome and Edge name it `chrome`. Both return promises in Manifest V3, so every
+// call in this extension goes through this one name, awaited, and never passes a
+// callback — callbacks are the one style the two do not share.
+const qbApi = globalThis.browser ?? globalThis.chrome;
+
+/**
+ * The sites the extension has to be allowed on: every page, for the cookies of a
+ * download and the link-click hook, and the loopback bridge itself. Chrome and
+ * Edge grant host permissions at install; Firefox asks the user separately, and
+ * until they agree the extension can neither see a click nor reach QuickByte.
+ */
+const QB_ORIGINS = ["http://*/*", "https://*/*"];
+
+async function qbHasSiteAccess() {
+  try {
+    return await qbApi.permissions.contains({ origins: QB_ORIGINS });
+  } catch {
+    return true; // A browser that cannot answer is one that granted it at install.
+  }
+}
+
+/** Must be called from a click: browsers only show a permission prompt for a user gesture. */
+async function qbRequestSiteAccess() {
+  try {
+    return await qbApi.permissions.request({ origins: QB_ORIGINS });
+  } catch {
+    return false;
+  }
+}
 
 const QB_DEFAULTS = {
   enabled: true,
@@ -34,16 +66,16 @@ const QB_DEFAULTS = {
 const QB_STORE = "local";
 
 async function qbGetSettings() {
-  const stored = await chrome.storage.local.get(QB_DEFAULTS);
+  const stored = await qbApi.storage.local.get(QB_DEFAULTS);
   if (stored.token) return { ...QB_DEFAULTS, ...stored };
 
   // Carry over a pairing done by an earlier build, which used storage.sync.
   // Only when local has nothing, and only once — after this the copy in local
   // is the one that answers.
   try {
-    const synced = await chrome.storage.sync.get(QB_DEFAULTS);
+    const synced = await qbApi.storage.sync.get(QB_DEFAULTS);
     if (synced.token) {
-      await chrome.storage.local.set(synced);
+      await qbApi.storage.local.set(synced);
       return { ...QB_DEFAULTS, ...synced };
     }
   } catch {
@@ -54,7 +86,7 @@ async function qbGetSettings() {
 }
 
 async function qbSaveSettings(values) {
-  await chrome.storage.local.set(values);
+  await qbApi.storage.local.set(values);
 }
 
 function qbBridgeUrl(settings, path) {

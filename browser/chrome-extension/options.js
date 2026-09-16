@@ -71,19 +71,30 @@ async function test() {
   // Routed through the service worker rather than fetched here: the worker is
   // the only context that keeps the bridge's error handling in one place, and
   // its answer is the same one a real capture would get.
-  chrome.runtime.sendMessage({ type: "qb-ping" }, (response) => {
-    if (chrome.runtime.lastError) {
-      setStatus(status, chrome.runtime.lastError.message, "bad");
-      return;
-    }
+  let response;
+  try {
+    response = await qbApi.runtime.sendMessage({ type: "qb-ping" });
+  } catch (error) {
+    setStatus(status, String(error.message || error), "bad");
+    return;
+  }
 
-    if (response?.ok) {
-      setStatus(status, `Connected to QuickByte ${response.info?.version ?? ""}`.trim(), "ok");
-      return;
-    }
+  if (response?.ok) {
+    setStatus(status, `Connected to QuickByte ${response.info?.version ?? ""}`.trim(), "ok");
+    return;
+  }
 
-    setStatus(status, describe(response?.error), "bad");
-  });
+  setStatus(status, describe(response?.error), "bad");
+}
+
+/**
+ * Firefox does not grant an extension its sites at install, and without them it
+ * can neither catch a click nor reach QuickByte on 127.0.0.1. Chrome and Edge
+ * grant them up front, so there this card never appears.
+ */
+async function showSiteAccess() {
+  const card = $("access");
+  card.hidden = await qbHasSiteAccess();
 }
 
 /** Turns the worker's terse errors into something a user can act on. */
@@ -100,8 +111,13 @@ function describe(error) {
 
 document.addEventListener("DOMContentLoaded", () => {
   load();
+  showSiteAccess();
   $("save").addEventListener("click", () => save());
   $("test").addEventListener("click", test);
+  $("grant").addEventListener("click", async () => {
+    await qbRequestSiteAccess();
+    showSiteAccess();
+  });
 
   // The two fields the extension is useless without persist as soon as you
   // leave them, so closing the tab can't lose a pairing.

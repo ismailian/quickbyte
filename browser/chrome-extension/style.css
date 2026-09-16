@@ -17,6 +17,11 @@
   box-sizing: border-box;
 }
 
+/* A card with display set by class would otherwise ignore the hidden attribute. */
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   font: 13px/1.5 "Segoe UI", system-ui, sans-serif;

@@ -9,12 +9,24 @@
     <header class="header">
       <h1>QuickByte Integration</h1>
       <p class="muted">
-        Downloads Chrome starts are handed to QuickByte instead. Pair the two by
+        Downloads your browser starts are handed to QuickByte instead. Pair the two by
         pasting the token from <strong>QuickByte → Tasks → Options → Browser</strong>.
       </p>
     </header>
 
     <main>
+      <section id="access" class="card" hidden>
+        <h2>Allow access to websites</h2>
+        <p class="muted">
+          This browser asks before an extension may read pages. QuickByte Integration
+          needs it to notice a download link being clicked, to pass on the cookies that
+          make a signed-in download work, and to reach QuickByte on this computer.
+        </p>
+        <div class="row">
+          <button id="grant" type="button" class="primary">Allow access</button>
+        </div>
+      </section>
+
       <section class="card">
         <h2>Connection</h2>
 
@@ -50,7 +62,7 @@
 
         <label class="check">
           <input id="captureAll" type="radio" name="capture" value="all" />
-          <span>Every download Chrome starts</span>
+          <span>Every download the browser starts</span>
         </label>
 
         <label class="field">

@@ -17,7 +17,7 @@ let settings = null;
 
 qbGetSettings().then((loaded) => { settings = loaded; });
 
-chrome.storage.onChanged.addListener((changes, area) => {
+qbApi.storage.onChanged.addListener((changes, area) => {
   // Only the area qbGetSettings reads; a stale sync entry from an earlier build
   // must not overwrite what the options page just wrote.
   if (area !== QB_STORE || !settings) return;
@@ -68,22 +68,24 @@ document.addEventListener(
     event.preventDefault();
     event.stopPropagation();
 
-    chrome.runtime.sendMessage(
-      {
+    // A rejected promise covers the background script being gone entirely; a
+    // false ok covers it answering that the bridge refused. Both mean the click
+    // has to happen after all.
+    const letTheClickHappen = () => {
+      window.location.href = link.url;
+    };
+
+    qbApi.runtime
+      .sendMessage({
         type: "qb-capture",
         url: link.url,
         fileName: link.fileName,
         referrer: location.href
-      },
-      (response) => {
-        // chrome.runtime.lastError covers the worker being gone entirely; a
-        // false ok covers it answering that the bridge refused. Both mean the
-        // click has to happen after all.
-        if (chrome.runtime.lastError || !response?.ok) {
-          window.location.href = link.url;
-        }
-      }
-    );
+      })
+      .then((response) => {
+        if (!response?.ok) letTheClickHappen();
+      })
+      .catch(letTheClickHappen);
   },
   true // capture phase: ahead of the page's own click handlers
 );

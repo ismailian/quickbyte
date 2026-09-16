@@ -56,15 +56,20 @@ all — the prompt is a consequence of that, not the point of it.
 ## Building the package
 
 ```powershell
-.\browser\package-extension.ps1
+.\browser\package-extension.ps1            # all three
+.\browser\package-extension.ps1 -Browser chrome
 ```
 
-Writes `browser/dist/quickbyte-integration-<version>.zip` with the manifest at
-the archive root — the store rejects an archive whose manifest sits one folder
-down — and with the repo's own `README.md`/`STORE.md` left out.
+Writes `browser/dist/quickbyte-integration-<version>-{chrome,edge,firefox}.zip`,
+each with its manifest at the archive root — the stores reject an archive whose
+manifest sits one folder down — and with the repo's own `README.md`/`STORE.md`
+left out. Firefox's package is built with `manifest.firefox.json` as its
+`manifest.json`; an unpacked copy lands in `browser/dist/firefox/` for
+`about:debugging`.
 
-Bump `version` in `manifest.json` before every upload. The store refuses a
-version it has already seen, and it will not accept a lower one afterwards.
+Bump `version` in **both** `manifest.json` and `manifest.firefox.json` before
+every upload — the script refuses a mismatch. The stores refuse a version they
+have already seen, and will not accept a lower one afterwards.
 
 ### Icons
 
@@ -193,3 +198,36 @@ the install prompt on:
 
 4. Update `browser/chrome-extension/README.md` to point at the store listing
    instead of the Load-unpacked instructions.
+
+## Microsoft Edge Add-ons
+
+Edge installs Chrome Web Store extensions, so the registry block above already
+offers the extension to Edge once the Chrome listing exists. Publishing to Edge
+Add-ons as well gives Edge users a listing of their own:
+
+1. Register at <https://partner.microsoft.com/dashboard/microsoftedge/overview>
+   (free).
+2. Upload `browser/dist/quickbyte-integration-<version>-edge.zip` — the same
+   files as the Chrome package.
+3. Reuse the listing copy, single-purpose statement and permission
+   justifications above; replace "Chrome" with "Microsoft Edge" in the summary.
+
+## Firefox Add-ons (addons.mozilla.org)
+
+1. Create a developer account at <https://addons.mozilla.org/developers/>.
+2. Upload `browser/dist/quickbyte-integration-<version>-firefox.zip`. The add-on
+   ID is fixed in `manifest.firefox.json`
+   (`quickbyte-integration@ismailaatif.com`) — never change it once published,
+   or Firefox treats the next version as a different add-on.
+3. AMO asks for source only for minified or generated code; everything here is
+   hand-written and ships as-is. Under data collection, declare **none**: cookies
+   are forwarded to 127.0.0.1 and never leave the machine.
+4. Firefox shows the host-permission request to the user rather than granting it
+   at install, which is why the options page carries an **Allow access** card.
+
+To have the installer offer it the way it offers the Chrome extension, Firefox
+reads `HKCU\Software\Mozilla\Firefox\Extensions`: a string value named after the
+add-on ID whose data is the path of a **signed** `.xpi`. Firefox asks the user on
+its next start, the same courtesy Chrome extends. An unsigned `.xpi` is refused
+by release Firefox, so this waits on AMO signing (listed or self-distributed).
+
