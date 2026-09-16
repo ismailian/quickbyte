@@ -41,6 +41,14 @@ public static class DownloadActions
     public static bool CanRetry(DownloadItem item) =>
         item.Status is DownloadStatus.Failed or DownloadStatus.Cancelled;
 
+    /// <summary>
+    /// A new address can be given to anything that is not transferring and not
+    /// finished — the same set that can be resumed, because that is what a
+    /// refreshed address is for. Not while it runs: the connections are reading
+    /// the old address, and the run's probe describes the old server.
+    /// </summary>
+    public static bool CanRefreshAddress(DownloadItem item) => CanResume(item);
+
     public static bool CanOpenFile(DownloadItem item) =>
         item.Status == DownloadStatus.Completed && File.Exists(item.FullPath);
 

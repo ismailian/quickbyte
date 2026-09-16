@@ -43,6 +43,21 @@ public sealed class FileLauncherTests : IDisposable
         FileLauncher.OpenFile(path);
     }
 
+    [Theory]
+    [InlineData("file:///C:/Windows/System32/calc.exe")]
+    [InlineData("javascript:alert(1)")]
+    [InlineData("ms-settings:privacy")]
+    [InlineData("C:\\Windows\\notepad.exe")]
+    [InlineData("not a url")]
+    [InlineData("")]
+    public void A_web_page_that_is_not_a_web_page_is_never_handed_to_the_shell(string url)
+    {
+        // The address is a captured Referer header: whatever the browser
+        // extension was sent. The shell runs what a file: or custom-protocol
+        // URL names, so only http and https get that far.
+        Assert.False(FileLauncher.OpenWebPage(url));
+    }
+
     [Fact]
     public void Revealing_something_that_is_gone_does_not_open_a_window()
     {

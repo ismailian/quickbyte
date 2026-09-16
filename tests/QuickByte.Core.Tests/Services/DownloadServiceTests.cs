@@ -382,9 +382,137 @@ public sealed class DownloadServiceTests
         Assert.Equal(DownloadStatus.Paused, fixture.Item.Status);
     }
 
+    // ------------------------------------------------------ a new address --
+
+    [Fact]
+    public void A_new_address_keeps_the_bytes_already_on_disk()
+    {
+        // An expired signed link: the file is the same file, only the permission
+        // to ask for it ran out.
+        using var fixture = new Fixture();
+        fixture.Item.Status = DownloadStatus.Failed;
+        fixture.Item.ErrorMessage = "Response status code does not indicate success: 403 (Forbidden).";
+        fixture.Item.DownloadedBytes = 400;
+
+        bool changed = fixture.Service.ChangeAddress(new AddressChange("https://cdn.example.com/file.bin?sig=new", Info("\"v1\"")));
+
+        Assert.True(changed);
+        Assert.Equal("https://cdn.example.com/file.bin?sig=new", fixture.Item.Url);
+        Assert.Equal(0, fixture.Pool.Discards);
+        Assert.Equal(400, fixture.Item.DownloadedBytes);
+        Assert.Null(fixture.Item.ErrorMessage);
+        Assert.Equal(DownloadStatus.Failed, fixture.Item.Status);
+    }
+
+    [Fact]
+    public void A_new_address_the_user_chose_to_start_over_with_discards_the_chunks()
+    {
+        using var fixture = new Fixture();
+        fixture.Item.Status = DownloadStatus.Paused;
+        fixture.Item.DownloadedBytes = 400;
+
+        fixture.Service.ChangeAddress(new AddressChange("https://example.com/v2.bin", Info("\"v2\"")) { DiscardProgress = true });
+
+        Assert.Equal(1, fixture.Pool.Discards);
+        Assert.Equal(0, fixture.Item.DownloadedBytes);
+    }
+
+    [Fact]
+    public void A_new_address_brings_its_own_login_and_headers_or_keeps_the_old_ones()
+    {
+        using var fixture = new Fixture();
+        fixture.Item.Status = DownloadStatus.Paused;
+        fixture.Item.Credentials = new DownloadCredentials { UserName = "alice", Password = "old" };
+        fixture.Item.Headers["Cookie"] = "session=expired";
+
+        fixture.Service.ChangeAddress(new AddressChange("https://example.com/a", Info("\"v1\"")));
+        Assert.Equal("old", fixture.Item.Credentials!.Password);
+        Assert.Equal("session=expired", fixture.Item.Headers["Cookie"]);
+
+        fixture.Service.ChangeAddress(new AddressChange("https://example.com/b", Info("\"v1\""))
+        {
+            Credentials = new DownloadCredentials { UserName = "alice", Password = "new" },
+            Headers = new Dictionary<string, string> { ["Cookie"] = "session=fresh" }
+        });
+        Assert.Equal("new", fixture.Item.Credentials!.Password);
+        Assert.Equal("session=fresh", fixture.Item.Headers["cookie"]);
+    }
+
+    [Fact]
+    public void A_new_server_is_not_held_to_the_old_one_s_broken_if_range()
+    {
+        using var fixture = new Fixture();
+        fixture.Item.Status = DownloadStatus.Paused;
+        fixture.Item.IfRangeUnsupported = true;
+
+        var probed = Info("\"v1\"");
+        probed.FinalUrl = "https://other.example.com/file.bin";
+        fixture.Service.ChangeAddress(new AddressChange("https://other.example.com/file.bin", probed));
+
+        Assert.False(fixture.Item.IfRangeUnsupported);
+        Assert.Equal("other.example.com", fixture.Item.RemoteVersion!.Host);
+    }
+
+    [Fact]
+    public async Task The_address_of_a_running_download_cannot_be_changed_under_its_connections()
+    {
+        using var fixture = new Fixture();
+        fixture.Pool.BlockUntilCancelled = true;
+        var running = fixture.Service.StartAsync();
+        await fixture.Pool.Started.Task;
+
+        bool changed = fixture.Service.ChangeAddress(new AddressChange("https://example.com/new", Info("\"v1\"")));
+
+        Assert.False(changed);
+        Assert.Equal("https://example.com/file.bin", fixture.Item.Url);
+
+        fixture.Service.Pause();
+        await running;
+    }
+
+    [Fact]
+    public void A_finished_download_has_no_address_to_refresh()
+    {
+        using var fixture = new Fixture();
+        fixture.Item.Status = DownloadStatus.Completed;
+
+        Assert.False(fixture.Service.ChangeAddress(new AddressChange("https://example.com/new", Info("\"v1\""))));
+    }
+
+    [Fact]
+    public async Task The_next_start_probes_the_new_address_rather_than_reusing_the_old_answer()
+    {
+        using var fixture = new Fixture();
+        fixture.Pool.BlockUntilCancelled = true;
+        var running = fixture.Service.StartAsync();
+        await fixture.Pool.Started.Task;
+        fixture.Service.Pause();
+        await running;
+
+        fixture.Service.ChangeAddress(new AddressChange("https://example.com/renewed", Info(null)));
+        fixture.Pool.BlockUntilCancelled = false;
+        await fixture.Service.ResumeAsync();
+
+        Assert.Equal(2, fixture.Provider.Probes);
+        Assert.Equal("https://example.com/renewed", fixture.Provider.LastUrl);
+    }
+
+    [Fact]
+    public void Changing_the_address_is_announced_so_every_window_shows_it()
+    {
+        using var fixture = new Fixture();
+        fixture.Item.Status = DownloadStatus.Paused;
+        int persistedBefore = fixture.Persisted;
+
+        fixture.Service.ChangeAddress(new AddressChange("https://example.com/new", Info("\"v1\"")));
+
+        Assert.Equal(new[] { DownloadStatus.Paused }, fixture.StatusHistory);
+        Assert.True(fixture.Persisted > persistedBefore);
+    }
+
     private static RemoteFileVersion Version(string etag) => new() { ETag = etag, Host = "example.com" };
 
-    private static RemoteFileInfo Info(string etag) => new()
+    private static RemoteFileInfo Info(string? etag) => new()
     {
         ContentLength = 1000,
         ContentType = "application/octet-stream",
@@ -462,6 +590,7 @@ public sealed class DownloadServiceTests
         public FakeInfoProvider(RemoteFileInfo info) => _info = info;
 
         public int Probes { get; private set; }
+        public string? LastUrl { get; private set; }
         public Exception? Throw { get; set; }
 
         /// <summary>Answers probe N (counting from 1) when set; otherwise every probe gets the fixture's info.</summary>
@@ -471,6 +600,7 @@ public sealed class DownloadServiceTests
             string url, RequestOptions? options = null, CancellationToken cancellationToken = default)
         {
             Probes++;
+            LastUrl = url;
             if (Throw is not null) return Task.FromException<RemoteFileInfo>(Throw);
             return Task.FromResult(Respond?.Invoke(Probes) ?? _info);
         }

@@ -305,6 +305,42 @@ public sealed class DownloadService : IDownloadService
         await StartAsync().ConfigureAwait(false);
     }
 
+    public bool ChangeAddress(AddressChange change)
+    {
+        // Not while a run holds the lifecycle. Its connections are reading the
+        // old address, and swapping it underneath them would split one file
+        // between two servers mid-transfer.
+        if (!_lifecycleLock.Wait(0)) return false;
+        try
+        {
+            if (!DownloadActions.CanRefreshAddress(Item)) return false;
+
+            Item.Url = change.Url;
+            if (change.Credentials is not null) Item.Credentials = change.Credentials.Clone();
+            if (change.Headers is not null)
+                Item.Headers = new Dictionary<string, string>(change.Headers, StringComparer.OrdinalIgnoreCase);
+
+            if (change.DiscardProgress) DiscardProgress();
+            AdoptFileInfo(change.FileInfo);
+
+            // A different server has to earn that distrust on its own.
+            Item.IfRangeUnsupported = false;
+
+            // The next start probes the new address and holds it to the version
+            // adopted just now, like any other resume.
+            _lastFileInfo = null;
+
+            // Same status, fresh event: it clears the error the old address
+            // failed with, persists, and tells every open window the address moved.
+            SetStatus(Item.Status);
+            return true;
+        }
+        finally
+        {
+            _lifecycleLock.Release();
+        }
+    }
+
     /// <summary>
     /// Deletes the download's chunk folder, retrying for a couple of seconds.
     /// <see cref="Stop"/> cancels and returns immediately, but the connection

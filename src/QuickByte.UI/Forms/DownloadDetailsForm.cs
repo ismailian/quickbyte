@@ -579,6 +579,11 @@ public sealed class DownloadDetailsForm : Form
     {
         if (e.DownloadId != _item.Id) return;
 
+        // A refreshed address arrives as a status event with the status
+        // unchanged, and a new server can answer ranges differently.
+        if (_urlLabel.Text != _item.Url) _urlLabel.Text = _item.Url;
+        RefreshStaticFields();
+
         RefreshDynamicFields();
         UpdateButtonsForStatus(e.NewStatus);
 

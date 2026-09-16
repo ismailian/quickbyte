@@ -374,6 +374,39 @@ public sealed class DownloadManagerTests
         Assert.Equal(version2, File.ReadAllBytes(item.FullPath));
     }
 
+    [Fact]
+    public async Task A_download_whose_link_expired_carries_on_from_its_chunks_at_a_new_address()
+    {
+        using var fixture = new Fixture();
+        byte[] content = Enumerable.Range(0, 4000).Select(i => (byte)(i % 251)).ToArray();
+        fixture.Factory.Content = content;
+        fixture.Info.ContentLength = content.Length;
+        fixture.Info.SupportsRangeRequests = true;
+        fixture.Factory.WriteFraction = 0.5;
+        var item = await fixture.AddAsync(fileName: "expired.bin", connections: 4, startImmediately: true);
+        Assert.Equal(DownloadStatus.Failed, item.Status);
+
+        bool changed = fixture.Manager.ChangeAddress(item.Id,
+            new AddressChange("https://example.com/file.bin?sig=renewed", fixture.Info));
+        fixture.Factory.WriteFraction = 1.0;
+        await fixture.Manager.ResumeAsync(item.Id);
+
+        Assert.True(changed);
+        Assert.Equal(DownloadStatus.Completed, item.Status);
+        Assert.Equal(content, File.ReadAllBytes(item.FullPath));
+        Assert.Contains(fixture.Factory.ResumeOffsets.Skip(4), offset => offset > 0);
+        Assert.All(fixture.Factory.Urls.Skip(4), url => Assert.EndsWith("sig=renewed", url));
+        Assert.Contains(fixture.Repository.LastSaved, saved => saved.Url.EndsWith("sig=renewed"));
+    }
+
+    [Fact]
+    public void An_address_change_for_a_download_that_does_not_exist_changes_nothing()
+    {
+        using var fixture = new Fixture();
+
+        Assert.False(fixture.Manager.ChangeAddress(Guid.NewGuid(), new AddressChange("https://x/y", fixture.Info)));
+    }
+
     // ------------------------------------------------------------- plumbing --
 
     private sealed class Fixture : IDisposable
@@ -483,6 +516,7 @@ public sealed class DownloadManagerTests
 
         public int Created { get; private set; }
         public List<long> ResumeOffsets { get; } = new();
+        public List<string> Urls { get; } = new();
 
         public IDownloadConnection Create(
             int connectionId, string url, long rangeStart, long rangeEnd, long alreadyDownloaded,
@@ -491,6 +525,7 @@ public sealed class DownloadManagerTests
         {
             Created++;
             ResumeOffsets.Add(alreadyDownloaded);
+            Urls.Add(url);
             return new ChunkWritingConnection(
                 connectionId, rangeStart, rangeEnd, alreadyDownloaded, chunkFilePath, Content, WriteFraction);
         }

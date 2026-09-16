@@ -286,6 +286,9 @@ public sealed class DownloadManager : IDownloadManager
         }
     }
 
+    public bool ChangeAddress(Guid downloadId, AddressChange change) =>
+        _services.TryGetValue(downloadId, out var service) && service.ChangeAddress(change);
+
     public void Remove(Guid downloadId, bool deleteFile)
     {
         if (_services.TryRemove(downloadId, out var service))

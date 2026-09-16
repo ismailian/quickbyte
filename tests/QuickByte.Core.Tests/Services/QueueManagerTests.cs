@@ -551,6 +551,7 @@ public sealed class QueueManagerTests
         public int PauseAll() => 0;
         public Task RetryAsync(Guid downloadId) => ResumeAsync(downloadId);
         public void Remove(Guid downloadId, bool deleteFile) { }
+        public bool ChangeAddress(Guid downloadId, AddressChange change) => false;
         public long GlobalSpeedLimitBytesPerSecond => 0;
         public void SetSpeedLimit(Guid downloadId, long bytesPerSecond) { }
         public void SetGlobalSpeedLimit(long bytesPerSecond) { }

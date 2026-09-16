@@ -272,6 +272,32 @@ public static class IconFactory
         g.FillRectangle(keyhole, body.X + (body.Width - hole * 0.42f) / 2, body.Y + body.Height * 0.42f, hole * 0.42f, body.Height * 0.30f);
     });
 
+    /// <summary>
+    /// Two chain links with a circular arrow badge, for Refresh Download Address.
+    /// A link rather than a globe: what changes is the address, and the globe
+    /// already means "add a new one".
+    /// </summary>
+    public static Bitmap RefreshAddress(int size = 24) => Canvas(size, g =>
+    {
+        float stroke = Math.Max(1.5f, size * 0.10f);
+        using (var pen = new Pen(Theme.Accent, stroke) { LineJoin = LineJoin.Round })
+        {
+            var state = g.Save();
+            g.TranslateTransform(size * 0.40f, size * 0.40f);
+            g.RotateTransform(-45);
+
+            // Two rounded rectangles overlapping along the diagonal read as a
+            // chain at every size; interlocking arcs smear together at 16 px.
+            var first = new RectangleF(-size * 0.36f, -size * 0.13f, size * 0.40f, size * 0.26f);
+            var second = new RectangleF(-size * 0.04f, -size * 0.13f, size * 0.40f, size * 0.26f);
+            using (var path = Theme.RoundedRect(first, size * 0.12f)) g.DrawPath(pen, path);
+            using (var path = Theme.RoundedRect(second, size * 0.12f)) g.DrawPath(pen, path);
+            g.Restore(state);
+        }
+
+        DrawBadge(g, size, Theme.Success, plus: false, arrow: true);
+    });
+
     /// <summary>Power glyph for the tray menu's Exit entry — the one command that really closes the app.</summary>
     public static Bitmap Exit(int size = 24) => Canvas(size, g =>
     {

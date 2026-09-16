@@ -22,4 +22,12 @@ public interface IDownloadService : IDisposable
     Task ResumeAsync();
     void Stop();
     Task RetryAsync();
+
+    /// <summary>
+    /// Points the download at a new address, keeping the bytes on disk unless
+    /// <see cref="AddressChange.DiscardProgress"/> says otherwise. Returns false,
+    /// and changes nothing, when the download is running or finished — see
+    /// <see cref="Helpers.DownloadActions.CanRefreshAddress"/>.
+    /// </summary>
+    bool ChangeAddress(AddressChange change);
 }

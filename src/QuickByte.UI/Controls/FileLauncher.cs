@@ -44,6 +44,29 @@ public static class FileLauncher
         }
     }
 
+    /// <summary>
+    /// Opens a web page in the default browser. Only <c>http</c> and <c>https</c>:
+    /// the address comes from a captured <c>Referer</c> header, which is whatever
+    /// the browser extension was sent, and handing the shell a <c>file:</c> or
+    /// custom-protocol URL from there would run whatever it names.
+    /// </summary>
+    /// <returns>Whether the page was handed to the shell.</returns>
+    public static bool OpenWebPage(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
+            return false;
+
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     public static void RevealInExplorer(string fullPath, string fallbackFolder)
     {
         try

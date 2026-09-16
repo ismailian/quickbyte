@@ -502,6 +502,40 @@ Weak ETags are never sent in `If-Range` (RFC 9110 forbids it), and a captured
 browser header that is any kind of conditional (`If-None-Match`, `If-Range`, …)
 is dropped, because a stale one would turn the probe into a `304`.
 
+### Refreshing a download's address
+
+The link is often the only thing wrong with a failed download. Signed URLs —
+S3, Google Drive, the download button on most sites behind a login or a CDN —
+expire, so a download paused overnight resumes into a `403` while gigabytes of
+it sit on disk. **Downloads > Refresh Download Address** (also on the row's
+right-click menu) gives it a new link without starting over.
+
+There are two ways to supply one, because an expired link usually cannot just be
+pasted — the page that issued it has to issue a fresh one:
+
+- **Paste it** into the window, which probes the new address.
+- **Click the download link again in the browser** while the window is open. The
+  capture is routed to the waiting window instead of opening Add Download
+  (`AddressRefresh.MatchesCapture`: the sizes must match, or the file names when
+  either size is unknown), and it brings the page's fresh cookie with it. If the
+  download was captured from a page, the window offers to open that page.
+
+Nothing changes until the new address has been judged against the download
+(`AddressRefresh.Judge`, built on the version rules above):
+
+| The new address serves… | Result |
+|---|---|
+| the same size, and no contradicting validator from the same host | **Update** — the download carries on from its chunks. Another mirror of the file counts. |
+| a different size | Refused. It is a different file; add it as a new download. |
+| the same size, but a different version from the same host | **Start Over** — continuing would merge two versions. |
+| a file of unknown size, with progress on disk | The user decides: keep the bytes, or start over. |
+
+A new address that asks for a login raises the sign-in prompt, which makes this
+also the way to give a download a password that changed since it was added. The
+change goes through `IDownloadManager.ChangeAddress`, which refuses a download
+that is running, clears the stale error, and is announced as a status event so
+the details window shows the new address.
+
 ## Credentials
 
 **HTTP Basic** is sent pre-emptively rather than after a `401`: every

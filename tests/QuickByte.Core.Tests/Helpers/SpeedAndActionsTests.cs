@@ -158,6 +158,18 @@ public sealed class DownloadActionsTests
         Assert.Equal(expected, DownloadActions.CanRetry(With(status)));
 
     [Theory]
+    [InlineData(DownloadStatus.Queued, true)]
+    [InlineData(DownloadStatus.Paused, true)]
+    [InlineData(DownloadStatus.Failed, true)]
+    [InlineData(DownloadStatus.Cancelled, true)]
+    [InlineData(DownloadStatus.Connecting, false)]
+    [InlineData(DownloadStatus.Downloading, false)]
+    [InlineData(DownloadStatus.Merging, false)]
+    [InlineData(DownloadStatus.Completed, false)]
+    public void CanRefreshAddress_is_never_offered_while_connections_read_the_old_one(DownloadStatus status, bool expected) =>
+        Assert.Equal(expected, DownloadActions.CanRefreshAddress(With(status)));
+
+    [Theory]
     [InlineData(DownloadStatus.Connecting, true)]
     [InlineData(DownloadStatus.Downloading, true)]
     [InlineData(DownloadStatus.Merging, true)]

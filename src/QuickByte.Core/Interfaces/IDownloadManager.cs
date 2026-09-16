@@ -42,6 +42,16 @@ public interface IDownloadManager
     Task RetryAsync(Guid downloadId);
     void Remove(Guid downloadId, bool deleteFile);
 
+    /// <summary>
+    /// Gives a download a new address — "Refresh Download Address", for a link
+    /// that expired while the bytes it already fetched are still on disk.
+    /// Persisted, and announced through <see cref="StatusChanged"/> (with the
+    /// status unchanged) so every window showing the download picks up the new
+    /// address. Returns false when there is no such download or it cannot be
+    /// changed right now.
+    /// </summary>
+    bool ChangeAddress(Guid downloadId, AddressChange change);
+
     /// <summary>The application-wide cap in bytes per second; 0 means unlimited.</summary>
     long GlobalSpeedLimitBytesPerSecond { get; }
 

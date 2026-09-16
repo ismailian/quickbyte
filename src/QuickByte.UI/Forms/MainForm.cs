@@ -80,6 +80,7 @@ public sealed class MainForm : Form
     private ToolStripMenuItem _menuDeleteCompleted = null!;
     private ToolStripMenuItem _menuProperties = null!;
     private ToolStripMenuItem _menuRetry = null!;
+    private ToolStripMenuItem _menuRefreshAddress = null!;
 
     /// <summary>
     /// Held so the manual check can grey itself while it is in flight — the
@@ -97,6 +98,7 @@ public sealed class MainForm : Form
     private ToolStripMenuItem _rowPause = null!;
     private ToolStripMenuItem _rowStop = null!;
     private ToolStripMenuItem _rowRetry = null!;
+    private ToolStripMenuItem _rowRefreshAddress = null!;
     private ToolStripMenuItem _rowRemove = null!;
     private ToolStripMenuItem _rowProperties = null!;
     private ToolStripMenuItem _rowAddToQueue = null!;
@@ -266,10 +268,12 @@ public sealed class MainForm : Form
 
         _menuProperties = MenuEntry("&Properties...", IconFactory.Properties(16), (_, _) => OpenSelectedDetailsWindow());
         _menuRetry = MenuEntry("&Retry", IconFactory.Retry(16), async (_, _) => await OnRetryClickedAsync());
+        _menuRefreshAddress = MenuEntry("Refresh Download &Address...", IconFactory.RefreshAddress(16), (_, _) => OnRefreshAddressClicked());
 
         var downloadsMenu = new ToolStripMenuItem("&Downloads");
         downloadsMenu.DropDownItems.Add(_menuProperties);
         downloadsMenu.DropDownItems.Add(_menuRetry);
+        downloadsMenu.DropDownItems.Add(_menuRefreshAddress);
 
         var viewMenu = new ToolStripMenuItem("&View");
         var toolbarToggle = new ToolStripMenuItem("&Toolbar") { CheckOnClick = true, Checked = true };
@@ -788,6 +792,7 @@ public sealed class MainForm : Form
         _rowPause = MenuEntry("Pause", IconFactory.Pause(16), (_, _) => OnPauseClicked());
         _rowStop = MenuEntry("Stop", IconFactory.Stop(16), (_, _) => OnStopClicked());
         _rowRetry = MenuEntry("Retry", IconFactory.Retry(16), async (_, _) => await OnRetryClickedAsync());
+        _rowRefreshAddress = MenuEntry("Refresh Download Address...", IconFactory.RefreshAddress(16), (_, _) => OnRefreshAddressClicked());
         _rowRemove = MenuEntry("Remove", IconFactory.Delete(16), (_, _) => OnRemoveClicked());
         _rowProperties = MenuEntry("Properties...", IconFactory.Properties(16), (_, _) => OpenSelectedDetailsWindow());
 
@@ -807,7 +812,7 @@ public sealed class MainForm : Form
         menu.Items.AddRange(new ToolStripItem[]
         {
             _rowOpenFile, _rowOpenFolder, new ToolStripSeparator(),
-            _rowResume, _rowPause, _rowStop, _rowRetry, new ToolStripSeparator(),
+            _rowResume, _rowPause, _rowStop, _rowRetry, _rowRefreshAddress, new ToolStripSeparator(),
             _rowAddToQueue, _rowRemoveFromQueue, new ToolStripSeparator(),
             _rowRemove, new ToolStripSeparator(),
             _rowProperties
@@ -836,6 +841,7 @@ public sealed class MainForm : Form
         _rowOpenFile.Available = single is not null && DownloadActions.CanOpenFile(single);
         _rowOpenFolder.Available = single is not null && DownloadActions.CanOpenFolder(single);
         _rowProperties.Available = single is not null;
+        _rowRefreshAddress.Available = single is not null && DownloadActions.CanRefreshAddress(single);
 
         _rowResume.Available = selection.Any(DownloadActions.CanResume);
         _rowPause.Available = selection.Any(DownloadActions.CanPause);
@@ -1342,6 +1348,19 @@ public sealed class MainForm : Form
     /// </summary>
     public void HandleCapturedDownload(CapturedDownload captured)
     {
+        // A refresh window waiting for exactly this link — the user went back to
+        // the page and clicked the download again — gets it instead. The most
+        // recently opened one wins, since that is the one the user just asked for.
+        var waiting = _childWindows
+            .OfType<RefreshAddressForm>()
+            .LastOrDefault(form => form.IsWaitingForCapture && AddressRefresh.MatchesCapture(form.Item, captured));
+        if (waiting is not null)
+        {
+            waiting.AcceptCapture(captured);
+            ForceToForeground(waiting);
+            return;
+        }
+
         // Only the Add window comes up. The click that produced this happened in
         // the browser and the user is still looking at it — pulling the whole
         // application onto the screen to ask one question is more than was asked
@@ -1424,6 +1443,27 @@ public sealed class MainForm : Form
             .ToList();
         if (tasks.Count == 0) return;
         await Task.WhenAll(tasks);
+    }
+
+    /// <summary>
+    /// Opens Refresh Download Address for the selected download, or brings its
+    /// window forward if one is already open — two windows racing to change one
+    /// download's address would each judge the new link against the other's.
+    /// </summary>
+    private void OnRefreshAddressClicked()
+    {
+        var item = SelectedItem;
+        if (item is null || !DownloadActions.CanRefreshAddress(item)) return;
+
+        var existing = _childWindows.OfType<RefreshAddressForm>().FirstOrDefault(form => form.Item.Id == item.Id);
+        if (existing is not null)
+        {
+            if (existing.WindowState == FormWindowState.Minimized) existing.WindowState = FormWindowState.Normal;
+            ForceToForeground(existing);
+            return;
+        }
+
+        ShowIndependently(new RefreshAddressForm(item, _downloadManager, _fileInfoProvider));
     }
 
     private void OnPauseClicked()
@@ -1558,6 +1598,7 @@ public sealed class MainForm : Form
         _menuDeleteCompleted.Enabled = anyCompleted;
         _menuRetry.Enabled = canRetry;
         _menuProperties.Enabled = single is not null;
+        _menuRefreshAddress.Enabled = single is not null && DownloadActions.CanRefreshAddress(single);
         _menuOpenFile.Enabled = single is not null && DownloadActions.CanOpenFile(single);
         _menuOpenFolder.Enabled = single is not null && DownloadActions.CanOpenFolder(single);
     }
