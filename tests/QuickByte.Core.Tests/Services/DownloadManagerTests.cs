@@ -59,6 +59,35 @@ public sealed class DownloadManagerTests
     }
 
     [Fact]
+    public async Task Two_downloads_of_the_same_name_are_never_given_the_same_file()
+    {
+        // Neither is on disk until it merges, so the file check alone gave both
+        // the same path and the second to finish replaced the first. A batch of
+        // links that all end in download.php made that routine.
+        using var fixture = new Fixture();
+
+        var first = await fixture.AddAsync(fileName: "download.php", startImmediately: false);
+        var second = await fixture.AddAsync(fileName: "download.php", startImmediately: false);
+        var third = await fixture.AddAsync(fileName: "DOWNLOAD.php", startImmediately: false);
+
+        Assert.Equal("download.php", first.FileName);
+        Assert.Equal("download (1).php", second.FileName);
+        Assert.Equal("DOWNLOAD (2).php", third.FileName);
+    }
+
+    [Fact]
+    public async Task A_cancelled_download_does_not_hold_on_to_its_name()
+    {
+        using var fixture = new Fixture();
+        var cancelled = await fixture.AddAsync(fileName: "a.bin", startImmediately: false);
+        fixture.Manager.Stop(cancelled.Id);
+
+        var next = await fixture.AddAsync(fileName: "a.bin", startImmediately: false);
+
+        Assert.Equal("a.bin", next.FileName);
+    }
+
+    [Fact]
     public async Task Adding_a_download_clamps_the_connection_count()
     {
         using var fixture = new Fixture();

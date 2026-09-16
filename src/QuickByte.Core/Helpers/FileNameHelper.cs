@@ -199,10 +199,20 @@ public static class FileNameHelper
     }
 
     /// <summary>Appends " (1)", " (2)"... to avoid overwriting an existing file.</summary>
-    public static string GetAvailableFilePath(string folder, string fileName)
+    public static string GetAvailableFilePath(string folder, string fileName) =>
+        GetAvailableFilePath(folder, fileName, _ => false);
+
+    /// <summary>
+    /// The same, also stepping past any path <paramref name="isReserved"/> claims —
+    /// a download that has not written its file yet. Two downloads added with the
+    /// same name used to be given the same path, and the second to finish replaced
+    /// the first; a batch of links that all end in <c>download.php</c> made that
+    /// the rule rather than the exception.
+    /// </summary>
+    public static string GetAvailableFilePath(string folder, string fileName, Func<string, bool> isReserved)
     {
         string fullPath = Path.Combine(folder, fileName);
-        if (!File.Exists(fullPath)) return fullPath;
+        if (!File.Exists(fullPath) && !isReserved(fullPath)) return fullPath;
 
         string nameOnly = Path.GetFileNameWithoutExtension(fileName);
         string ext = Path.GetExtension(fileName);
@@ -210,7 +220,7 @@ public static class FileNameHelper
         for (int i = 1; ; i++)
         {
             string candidate = Path.Combine(folder, $"{nameOnly} ({i}){ext}");
-            if (!File.Exists(candidate)) return candidate;
+            if (!File.Exists(candidate) && !isReserved(candidate)) return candidate;
         }
     }
 }

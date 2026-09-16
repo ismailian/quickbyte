@@ -772,6 +772,24 @@ Every window is styled after classic IDM, on a single flat palette defined in
   somewhere you chose on purpose (`Core/Helpers/UserPath.cs`). **Options** groups
   settings into Connection / Folders / Interface / Startup / Browser tabs, and
   its *Default download folder* is abbreviated the same way.
+- **Batch Download** (*Tasks > Add Batch Download*) — adds many downloads at
+  once. Paste a list of links or a whole page's source, import a `.txt` or
+  `.html` file, or type a pattern: `https://example.com/photo[001-250].jpg` is
+  250 links padded to three digits, `disc[a-c].iso` three, and several ranges
+  in one address multiply (`BatchLinks`). Only a range of two numbers or two
+  single letters counts, so an IPv6 host like `http://[::1]/` is left alone;
+  trailing sentence punctuation and `&amp;` from page sources are cleaned up;
+  and a batch is capped at 5,000 links so a typo in a range cannot freeze the
+  window. Every link is probed, six at a time, and listed with its real name
+  and size; a link that fails (or asks for a login) is left unticked. The batch
+  goes into a new queue by default, an existing one, or starts at once — and
+  opens no details window per download.
+
+  Adding many downloads at once exposed an old collision: a download's name was
+  only checked against files on disk, so two unfinished downloads of
+  `download.php` were given the same path and the second to finish replaced
+  the first. `DownloadManager.AddDownloadAsync` now also steps past any name an
+  unfinished download has claimed, under a lock.
 - **Sign In** — a small modal that appears only when a server answers a probe
   with a `401` or an FTP `530`. It names the host, repeats what the server
   said, and hands the login straight back to the fetch that was refused.

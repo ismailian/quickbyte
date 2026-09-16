@@ -273,6 +273,27 @@ public static class IconFactory
     });
 
     /// <summary>
+    /// A stack of three link rows with an add badge, for Batch Download: the Add
+    /// URL globe means one address, and this is many of them at once.
+    /// </summary>
+    public static Bitmap BatchDownload(int size = 24) => Canvas(size, g =>
+    {
+        float stroke = Math.Max(1f, size * 0.06f);
+        for (int i = 0; i < 3; i++)
+        {
+            var row = new RectangleF(size * 0.06f, size * (0.10f + i * 0.24f), size * 0.62f, size * 0.17f);
+            using var fill = new SolidBrush(i == 0 ? Theme.Accent : Theme.AccentLight);
+            using var path = Theme.RoundedRect(row, size * 0.05f);
+            g.FillPath(fill, path);
+
+            using var pen = new Pen(Color.FromArgb(200, Color.White), stroke);
+            g.DrawLine(pen, row.X + row.Width * 0.18f, row.Y + row.Height / 2, row.Right - row.Width * 0.18f, row.Y + row.Height / 2);
+        }
+
+        DrawBadge(g, size, Theme.Success, plus: true);
+    });
+
+    /// <summary>
     /// Two chain links with a circular arrow badge, for Refresh Download Address.
     /// A link rather than a globe: what changes is the address, and the globe
     /// already means "add a new one".

@@ -45,6 +45,12 @@ public sealed class DownloadManager : IDownloadManager
 
     private readonly BandwidthLimiter _globalSpeedLimit;
 
+    /// <summary>
+    /// Held while a new download's file name is chosen and the download is
+    /// registered, so two adds cannot both see the same name as free.
+    /// </summary>
+    private readonly object _addLock = new();
+
     public event EventHandler<DownloadListChangedEventArgs>? DownloadListChanged;
     public event EventHandler<DownloadProgressEventArgs>? ProgressChanged;
     public event EventHandler<DownloadStatusChangedEventArgs>? StatusChanged;
@@ -191,29 +197,36 @@ public sealed class DownloadManager : IDownloadManager
     {
         Directory.CreateDirectory(request.SaveFolder);
         string safeName = FileNameHelper.SanitizeFileName(request.FileName);
-        string finalPath = FileNameHelper.GetAvailableFilePath(request.SaveFolder, safeName);
 
-        var item = new DownloadItem
+        DownloadItem item;
+        lock (_addLock)
         {
-            Url = request.Url,
-            FileName = Path.GetFileName(finalPath),
-            SaveFolder = request.SaveFolder,
-            ContentType = request.FileInfo.ContentType,
-            TotalBytes = request.FileInfo.ContentLength,
-            ConnectionsCount = _settingsService.Current.ClampConnections(request.ConnectionsCount),
-            SupportsResume = request.FileInfo.SupportsRangeRequests,
-            BypassCache = request.FileInfo.BypassCache,
-            RemoteVersion = request.FileInfo.Version,
-            Status = DownloadStatus.Queued,
-            TempFolderPath = Path.Combine(_settingsService.Current.TempFolder, Guid.NewGuid().ToString("N")),
-            Credentials = request.Credentials?.Clone(),
-            Headers = request.Headers is null
-                ? new Dictionary<string, string>()
-                : new Dictionary<string, string>(request.Headers, StringComparer.OrdinalIgnoreCase)
-        };
+            // A file that is not on disk yet can still be spoken for: every
+            // unfinished download in the list will write its name when it merges.
+            string finalPath = FileNameHelper.GetAvailableFilePath(request.SaveFolder, safeName, IsReservedByADownload);
 
-        _items[item.Id] = item;
-        RegisterService(item);
+            item = new DownloadItem
+            {
+                Url = request.Url,
+                FileName = Path.GetFileName(finalPath),
+                SaveFolder = request.SaveFolder,
+                ContentType = request.FileInfo.ContentType,
+                TotalBytes = request.FileInfo.ContentLength,
+                ConnectionsCount = _settingsService.Current.ClampConnections(request.ConnectionsCount),
+                SupportsResume = request.FileInfo.SupportsRangeRequests,
+                BypassCache = request.FileInfo.BypassCache,
+                RemoteVersion = request.FileInfo.Version,
+                Status = DownloadStatus.Queued,
+                TempFolderPath = Path.Combine(_settingsService.Current.TempFolder, Guid.NewGuid().ToString("N")),
+                Credentials = request.Credentials?.Clone(),
+                Headers = request.Headers is null
+                    ? new Dictionary<string, string>()
+                    : new Dictionary<string, string>(request.Headers, StringComparer.OrdinalIgnoreCase)
+            };
+
+            _items[item.Id] = item;
+            RegisterService(item);
+        }
         PersistAll();
 
         DownloadListChanged?.Invoke(this, new DownloadListChangedEventArgs { ChangeType = DownloadListChangeType.Added, Item = item });
@@ -225,6 +238,22 @@ public sealed class DownloadManager : IDownloadManager
             await StartAsync(item.Id).ConfigureAwait(false);
 
         return item;
+    }
+
+    /// <summary>
+    /// Whether an unfinished download will write to <paramref name="path"/>. A
+    /// completed one has already written it, so <see cref="File.Exists"/> covers
+    /// those; a cancelled one never will.
+    /// </summary>
+    private bool IsReservedByADownload(string path)
+    {
+        foreach (var existing in _items.Values)
+        {
+            if (existing.Status is DownloadStatus.Completed or DownloadStatus.Cancelled) continue;
+            if (string.Equals(NormalizePath(existing.FullPath), NormalizePath(path), StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 
     private IDownloadService RegisterService(DownloadItem item)

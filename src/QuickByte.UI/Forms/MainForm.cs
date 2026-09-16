@@ -130,14 +130,15 @@ public sealed class MainForm : Form
     private bool _centreOnFirstShow;
 
     /// <summary>
-    /// Set for the moment an add destined for a queue takes. A queued download
-    /// has not started and will not start until the queue reaches it, so the
-    /// details window that normally follows an add would be a progress window
-    /// for something that is not happening. The flag is enough because
+    /// Set for the moment an add that should not open a details window takes: one
+    /// destined for a queue — it has not started and will not until the queue
+    /// reaches it, so a progress window would be for something that is not
+    /// happening — and every download of a batch, where two hundred windows
+    /// opening at once is no use to anyone. The flag is enough because
     /// <see cref="IDownloadManager.AddDownloadAsync"/> raises its Added event
     /// synchronously, on this thread, inside the call it guards.
     /// </summary>
-    private bool _addingToQueue;
+    private bool _suppressDetailsWindow;
 
     /// <summary>
     /// Set only by <see cref="ExitApplication"/>. Until then the close button is
@@ -252,6 +253,7 @@ public sealed class MainForm : Form
 
         var tasksMenu = new ToolStripMenuItem("&Tasks");
         tasksMenu.DropDownItems.Add("Add &URL...", IconFactory.AddUrl(16), (_, _) => OnAddDownloadClicked());
+        tasksMenu.DropDownItems.Add("Add &Batch Download...", IconFactory.BatchDownload(16), (_, _) => OnBatchDownloadClicked());
         tasksMenu.DropDownItems.Add(new ToolStripSeparator());
         tasksMenu.DropDownItems.Add(_menuResume);
         tasksMenu.DropDownItems.Add(_menuPause);
@@ -1015,7 +1017,7 @@ public sealed class MainForm : Form
             AddRow(e.Item, atTop: true);
             SetRowVisible(_rowsById[e.Item.Id], PassesFilter(e.Item));
 
-            if (_settingsService.Current.AutoOpenDetailsWindow && !_addingToQueue)
+            if (_settingsService.Current.AutoOpenDetailsWindow && !_suppressDetailsWindow)
                 OpenDetailsWindow(e.Item);
         }
         else
@@ -1474,17 +1476,59 @@ public sealed class MainForm : Form
     {
         DownloadItem item;
 
-        _addingToQueue = true;
+        _suppressDetailsWindow = true;
         try
         {
             item = await _downloadManager.AddDownloadAsync(request);
         }
         finally
         {
-            _addingToQueue = false;
+            _suppressDetailsWindow = false;
         }
 
         _queueManager.AddToQueue(queueId, new[] { item.Id });
+    }
+
+    /// <summary>Opens Batch Download as an independent window; the downloads are added when it closes.</summary>
+    private void OnBatchDownloadClicked()
+    {
+        var dialog = new BatchDownloadForm(_settingsService, _fileInfoProvider, _queueManager.Queues);
+        dialog.FormClosed += (_, _) =>
+        {
+            if (dialog.Results is { Count: > 0 } requests)
+                AddBatch(requests, dialog.SelectedQueueId, dialog.NewQueueName);
+        };
+        ShowIndependently(dialog, CascadeStep(_childWindows.Count));
+    }
+
+    /// <summary>
+    /// Adds a batch, all of it into one queue or all of it started now, with no
+    /// details window for any of them. Every request here was added with the
+    /// queue's decision already made: a queued one is added without starting, so
+    /// <see cref="IDownloadManager.AddDownloadAsync"/> returns at once; a started
+    /// one is not awaited, because that call completes when the download does, and
+    /// the concurrency gate decides how many run.
+    /// </summary>
+    private void AddBatch(IReadOnlyList<DownloadRequest> requests, Guid? queueId, string? newQueueName)
+    {
+        if (newQueueName is not null) queueId = _queueManager.Create(newQueueName).Id;
+
+        var added = new List<Guid>(requests.Count);
+        _suppressDetailsWindow = true;
+        try
+        {
+            foreach (var request in requests)
+            {
+                var adding = _downloadManager.AddDownloadAsync(request with { StartImmediately = queueId is null });
+                if (queueId is not null && adding.IsCompletedSuccessfully) added.Add(adding.Result.Id);
+            }
+        }
+        finally
+        {
+            _suppressDetailsWindow = false;
+        }
+
+        if (queueId is { } id && added.Count > 0) _queueManager.AddToQueue(id, added);
     }
 
     /// <summary>

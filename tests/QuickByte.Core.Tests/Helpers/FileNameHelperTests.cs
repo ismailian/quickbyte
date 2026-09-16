@@ -200,6 +200,18 @@ public sealed class FileNameHelperTests
     }
 
     [Fact]
+    public void GetAvailableFilePath_steps_past_a_name_a_download_has_spoken_for()
+    {
+        // Not on disk yet, but an unfinished download will write it when it merges.
+        using var folder = new TempFolder();
+        string reserved = Path.Combine(folder.Path, "download.php");
+
+        string path = FileNameHelper.GetAvailableFilePath(folder.Path, "download.php", candidate => candidate == reserved);
+
+        Assert.Equal(Path.Combine(folder.Path, "download (1).php"), path);
+    }
+
+    [Fact]
     public void GetAvailableFilePath_keeps_the_extension_on_the_end()
     {
         using var folder = new TempFolder();
