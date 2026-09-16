@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.Windows.Forms;
+using QuickByte.Core.Enums;
 using QuickByte.Core.Helpers;
 using QuickByte.Core.Interfaces;
 using QuickByte.Core.Models;
@@ -47,6 +48,7 @@ public sealed class SettingsForm : Form
     private CheckBox _autoOpenDetailsCheckBox = null!;
     private CheckBox _showCompletionCheckBox = null!;
     private CheckBox _monitorClipboardCheckBox = null!;
+    private ComboBox _appearanceBox = null!;
     private CheckBox _sortByCategoryCheckBox = null!;
     private readonly Dictionary<FileCategory, TextBox> _categoryFolderTextBoxes = new();
     private TextBox _clipboardTypesTextBox = null!;
@@ -65,14 +67,17 @@ public sealed class SettingsForm : Form
         LoadValues();
 
         FormClosed += (_, _) => _tips.Dispose();
+
+        // Last, once every control exists: see Theme.Attach.
+        Theme.Attach(this);
     }
 
     private void BuildUi()
     {
         Text = "QuickByte Options";
         Width = 600;
-        // Sized for the tallest tab — Connection, at five rows of 58 px.
-        Height = 560;
+        // Sized for the tallest tab — Interface, at six rows of 58 px.
+        Height = 618;
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -218,8 +223,27 @@ public sealed class SettingsForm : Form
 
     private void BuildInterfaceTab(Panel page)
     {
-        var layout = NewGrid(page, rows: 5);
+        var layout = NewGrid(page, rows: 6);
         int row = 0;
+
+        var appearanceCaption = CaptionBlock("Appearance", "Light, dark, or as Windows is set. Applies when QuickByte next starts.");
+        layout.Controls.Add(appearanceCaption, 0, row);
+        layout.SetColumnSpan(appearanceCaption, 2);
+        _appearanceBox = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Theme.Surface,
+            ForeColor = Theme.Text,
+            Font = Theme.Ui,
+            Width = 96,
+            Anchor = AnchorStyles.Right,
+            Margin = new Padding(0, 13, 0, 0),
+            FormattingEnabled = true
+        };
+        _appearanceBox.Items.AddRange(new object[] { AppTheme.System, AppTheme.Light, AppTheme.Dark });
+        _appearanceBox.Format += (_, e) => e.Value = e.ListItem is AppTheme.System ? "As Windows" : e.ListItem!.ToString();
+        layout.Controls.Add(_appearanceBox, 2, row++);
 
         _progressIntervalUpDown = AddNumericRow(layout, row++,
             "Progress sampling (ms)",
@@ -561,6 +585,7 @@ public sealed class SettingsForm : Form
         UpdateCategoryFolderFields();
         _autoOpenDetailsCheckBox.Checked = s.AutoOpenDetailsWindow;
         _showCompletionCheckBox.Checked = s.ShowCompletionWindow;
+        _appearanceBox.SelectedItem = Enum.IsDefined(s.Appearance) ? s.Appearance : AppTheme.System;
         _monitorClipboardCheckBox.Checked = s.MonitorClipboard;
         _clipboardTypesTextBox.Text = s.ClipboardFileTypes;
         _clipboardTypesTextBox.Enabled = s.MonitorClipboard;
@@ -630,6 +655,7 @@ public sealed class SettingsForm : Form
                 .ToDictionary(pair => pair.Key, pair => UserPath.Expand(pair.Value.Text.Trim())),
             AutoOpenDetailsWindow = _autoOpenDetailsCheckBox.Checked,
             ShowCompletionWindow = _showCompletionCheckBox.Checked,
+            Appearance = _appearanceBox.SelectedItem is AppTheme appearance ? appearance : AppTheme.System,
             MonitorClipboard = _monitorClipboardCheckBox.Checked,
             // Normalised on the way in, so what is saved is what is used.
             ClipboardFileTypes = string.Join(' ', ClipboardLinks.ParseFileTypes(_clipboardTypesTextBox.Text)),
@@ -670,7 +696,14 @@ public sealed class SettingsForm : Form
         // Saved before the registry write, and the write is not allowed to fail
         // the save: everything else on this page is still valid, and a startup
         // entry Windows refused is worth a sentence, not a lost Options session.
+        bool appearanceChanged = updated.Appearance != _settingsService.Current.Appearance;
         _settingsService.Save(updated);
+
+        if (appearanceChanged)
+        {
+            MessageBox.Show(this, "The new appearance applies the next time QuickByte starts.",
+                "Options", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
 
         if (!StartupRegistration.TryApply(updated.StartWithWindows, out string? startupError))
         {

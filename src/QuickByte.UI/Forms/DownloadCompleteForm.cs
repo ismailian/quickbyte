@@ -30,6 +30,9 @@ public sealed class DownloadCompleteForm : Form
         _settingsService = settingsService;
         _verifyChecksum = verifyChecksum;
         BuildUi();
+
+        // Last, once every control exists: see Theme.Attach.
+        Theme.Attach(this);
     }
 
     private void BuildUi()

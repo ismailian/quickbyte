@@ -60,6 +60,9 @@ public sealed class RefreshAddressForm : Form
 
         BuildUi();
         PrefillFromClipboard();
+
+        // Last, once every control exists: see Theme.Attach.
+        Theme.Attach(this);
     }
 
     public DownloadItem Item { get; }

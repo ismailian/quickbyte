@@ -68,6 +68,9 @@ public sealed class CredentialsForm : Form
             _userNameTextBox.Text = existing.UserName;
             _passwordTextBox.Text = existing.Password;
         }
+
+        // Last, once every control exists: see Theme.Attach.
+        Theme.Attach(this);
     }
 
     private static string HostOf(string url)

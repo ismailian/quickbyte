@@ -41,6 +41,9 @@ public sealed class ChecksumForm : Form
             PrefillFromClipboard();
 
         FormClosed += (_, _) => _running?.Cancel();
+
+        // Last, once every control exists: see Theme.Attach.
+        Theme.Attach(this);
     }
 
     public DownloadItem Item => _item;

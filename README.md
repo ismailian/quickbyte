@@ -737,6 +737,16 @@ command line forces it for a single run.
 
 ## UI
 
+**Light and dark.** *Options > Interface > Appearance* chooses a light or a
+dark palette, or follows Windows' own app mode (the default). Every colour comes
+from `Theme`, which holds both palettes and is set once at startup — a WinForms
+window takes its colours when it is built, so a change applies at the next
+launch. In dark mode each window also gets a dark title bar and dark scroll
+bars, list headers and drop-downs, which WinForms cannot reach on its own
+(`DarkMode`, the one place that asks Windows for them). The contrast of every
+text/background pair that matters is checked against WCAG ratios in the tests,
+so a later tweak cannot make the dark theme quietly unreadable.
+
 Every window is styled after classic IDM, on a single flat palette defined in
 `UI/Controls/Theme.cs`:
 

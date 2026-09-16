@@ -70,6 +70,9 @@ public sealed class BatchDownloadForm : Form
             _closing.Cancel();
             _closing.Dispose();
         };
+
+        // Last, once every control exists: see Theme.Attach.
+        Theme.Attach(this);
     }
 
     private void BuildUi()

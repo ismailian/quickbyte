@@ -29,8 +29,8 @@ public enum TaskbarProgressState
 /// manager show, so a download that is minimised or sitting behind the browser
 /// can still be read at a glance.
 ///
-/// This is one of two places in the repository that talk to Windows directly
-/// (the other is <see cref="ClipboardWatcher"/>), and
+/// This is one of three places in the repository that talk to Windows directly
+/// (the others are <see cref="ClipboardWatcher"/> and <see cref="DarkMode"/>), and
 /// it is here because there is no managed alternative: the indicator is only
 /// reachable through the shell's <c>ITaskbarList3</c>, and the moment it becomes
 /// reachable is only announced through a message from

@@ -208,6 +208,9 @@ public sealed class MainForm : Form
             _clipboardWatcher.Dispose();
             _trayIcon.Dispose();
         };
+
+        // Last, once every control exists: see Theme.Attach.
+        Theme.Attach(this);
     }
 
     // ---------------------------------------------------------------- UI --

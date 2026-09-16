@@ -2,6 +2,7 @@ using System.Threading;
 using System.Windows.Forms;
 using QuickByte.Core.Interfaces;
 using QuickByte.Core.Services;
+using QuickByte.UI.Controls;
 using QuickByte.UI.Forms;
 
 namespace QuickByte.UI;
@@ -34,6 +35,10 @@ internal static class Program
             // Core service types are referenced directly.
             var settingsService = new SettingsService();
             settingsService.Load();
+
+            // Before any window is built: each one takes its colours as it is
+            // constructed. See Theme.Apply.
+            Theme.Apply(settingsService.Current.Appearance);
 
             // Re-asserts the Run key entry against this executable's current
             // path, so "start with Windows" survives an update or a move. Silent

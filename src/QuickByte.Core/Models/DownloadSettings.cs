@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using QuickByte.Core.Enums;
 using QuickByte.Core.Helpers;
 
 namespace QuickByte.Core.Models;
@@ -193,6 +194,13 @@ public sealed class DownloadSettings
 
     /// <summary>Show the "download complete" window when a download finishes.</summary>
     public bool ShowCompletionWindow { get; set; } = true;
+
+    /// <summary>
+    /// Light, dark, or whatever Windows is set to. Only the preference lives here;
+    /// what "System" means is read from Windows by the UI project. Applied when
+    /// the app starts.
+    /// </summary>
+    public AppTheme Appearance { get; set; } = AppTheme.System;
 
     /// <summary>
     /// Offer a download when a link to one of <see cref="ClipboardFileTypes"/> is

@@ -75,6 +75,9 @@ public sealed class QueueManagerForm : Form
 
         RefreshQueueList();
         SelectFirstQueue();
+
+        // Last, once every control exists: see Theme.Attach.
+        Theme.Attach(this);
     }
 
     // ---------------------------------------------------------------- UI --

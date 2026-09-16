@@ -63,6 +63,9 @@ public sealed class UpdateForm : Form
         _mode = mode;
 
         BuildUi();
+
+        // Last, once every control exists: see Theme.Attach.
+        Theme.Attach(this);
     }
 
     // ---------------------------------------------------------------- UI --

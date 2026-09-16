@@ -14,12 +14,14 @@ namespace QuickByte.UI.Controls;
 /// </summary>
 public static class IconFactory
 {
-    public static readonly Color Accent = Theme.Accent;
-    public static readonly Color AccentDark = Theme.AccentDark;
-    public static readonly Color Green = Theme.Success;
-    public static readonly Color Red = Theme.Danger;
-    public static readonly Color Amber = Theme.Warning;
-    public static readonly Color Gray = Color.FromArgb(122, 133, 146);
+    // Properties, not fields: the palette is chosen at startup, after this type
+    // may already have been touched, and a copy taken earlier would be the light one.
+    public static Color Accent => Theme.Accent;
+    public static Color AccentDark => Theme.AccentDark;
+    public static Color Green => Theme.Success;
+    public static Color Red => Theme.Danger;
+    public static Color Amber => Theme.Warning;
+    public static Color Gray => Theme.TextMuted;
 
     private static Bitmap Canvas(int size, Action<Graphics> draw)
     {

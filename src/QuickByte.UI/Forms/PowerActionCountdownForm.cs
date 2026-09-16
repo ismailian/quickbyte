@@ -39,6 +39,9 @@ public sealed class PowerActionCountdownForm : Form
         _timer.Tick += (_, _) => Tick();
         Shown += (_, _) => _timer.Start();
         FormClosed += (_, _) => _timer.Dispose();
+
+        // Last, once every control exists: see Theme.Attach.
+        Theme.Attach(this);
     }
 
     private void BuildUi(string reason, int stillRunning)

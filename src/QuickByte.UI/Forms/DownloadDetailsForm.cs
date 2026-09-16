@@ -80,6 +80,9 @@ public sealed class DownloadDetailsForm : Form
             _toolTip.Dispose();
             _taskbarProgress.Dispose();
         };
+
+        // Last, once every control exists: see Theme.Attach.
+        Theme.Attach(this);
     }
 
     // ---------------------------------------------------------------- UI --

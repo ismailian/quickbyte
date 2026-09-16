@@ -7,8 +7,9 @@ namespace QuickByte.UI.Controls;
 /// Tells the app when the clipboard changes, for "Watch the clipboard for
 /// download links".
 ///
-/// This is the second file in the repository that talks to Windows directly,
-/// beside <see cref="TaskbarProgress"/>, and for the same kind of reason: there is
+/// This is one of three files in the repository that talk to Windows directly,
+/// beside <see cref="TaskbarProgress"/> and <see cref="DarkMode"/>, and for the
+/// same kind of reason: there is
 /// no managed way to be told the clipboard changed. The alternative is polling
 /// <see cref="Clipboard"/> on a timer, and that is worse than it sounds — every
 /// read opens the clipboard, and while it is open no other program can write to

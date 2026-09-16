@@ -134,6 +134,9 @@ public sealed class NewDownloadForm : Form
         }
 
         ApplySeed(url.Trim(), captured);
+
+        // Last, once every control exists: see Theme.Attach.
+        Theme.Attach(this);
     }
 
     /// <summary>
