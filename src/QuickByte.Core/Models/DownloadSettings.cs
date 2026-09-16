@@ -141,6 +141,16 @@ public sealed class DownloadSettings
     /// <summary>Show the "download complete" window when a download finishes.</summary>
     public bool ShowCompletionWindow { get; set; } = true;
 
+    /// <summary>
+    /// Offer a download when a link to one of <see cref="ClipboardFileTypes"/> is
+    /// copied. Off unless the user turns it on: it means listening to the
+    /// clipboard, and nobody should find that happening uninvited.
+    /// </summary>
+    public bool MonitorClipboard { get; set; }
+
+    /// <summary>The extensions a copied link must end in to be offered — see <see cref="Helpers.ClipboardLinks"/>.</summary>
+    public string ClipboardFileTypes { get; set; } = Helpers.ClipboardLinks.DefaultFileTypes;
+
     public int ClampConnections(int requested) =>
         Math.Clamp(requested, MinConnections, MaxConnections);
 

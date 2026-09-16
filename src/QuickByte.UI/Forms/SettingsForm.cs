@@ -46,6 +46,8 @@ public sealed class SettingsForm : Form
     private TextBox _downloadFolderTextBox = null!;
     private CheckBox _autoOpenDetailsCheckBox = null!;
     private CheckBox _showCompletionCheckBox = null!;
+    private CheckBox _monitorClipboardCheckBox = null!;
+    private TextBox _clipboardTypesTextBox = null!;
     private CheckBox _startWithWindowsCheckBox = null!;
     private CheckBox _startMinimizedCheckBox = null!;
     private CheckBox _browserIntegrationCheckBox = null!;
@@ -138,7 +140,7 @@ public sealed class SettingsForm : Form
 
     private void BuildInterfaceTab(Panel page)
     {
-        var layout = NewGrid(page, rows: 3);
+        var layout = NewGrid(page, rows: 5);
         int row = 0;
 
         _progressIntervalUpDown = AddNumericRow(layout, row++,
@@ -151,6 +153,16 @@ public sealed class SettingsForm : Form
 
         _showCompletionCheckBox = AddCheckRow(layout, row++,
             "Show the download complete window when a download finishes");
+
+        _monitorClipboardCheckBox = AddCheckRow(layout, row++,
+            "Watch the clipboard and offer to download copied links to these file types:");
+
+        layout.Controls.Add(CaptionBlock("File types", "Separated by spaces."), 0, row);
+        _clipboardTypesTextBox = FormChrome.Field();
+        _clipboardTypesTextBox.Margin = new Padding(0, 12, 0, 0);
+        layout.Controls.Add(_clipboardTypesTextBox, 1, row);
+        layout.SetColumnSpan(_clipboardTypesTextBox, 2);
+        _monitorClipboardCheckBox.CheckedChanged += (_, _) => _clipboardTypesTextBox.Enabled = _monitorClipboardCheckBox.Checked;
 
     }
 
@@ -467,6 +479,9 @@ public sealed class SettingsForm : Form
         _downloadFolderTextBox.Text = UserPath.Shorten(s.DefaultDownloadFolder);
         _autoOpenDetailsCheckBox.Checked = s.AutoOpenDetailsWindow;
         _showCompletionCheckBox.Checked = s.ShowCompletionWindow;
+        _monitorClipboardCheckBox.Checked = s.MonitorClipboard;
+        _clipboardTypesTextBox.Text = s.ClipboardFileTypes;
+        _clipboardTypesTextBox.Enabled = s.MonitorClipboard;
 
         // Either half is enough to answer "will QuickByte start with Windows?"
         // with yes: the Run entry is what Windows acts on, and the saved flag is
@@ -527,6 +542,9 @@ public sealed class SettingsForm : Form
             DefaultDownloadFolder = UserPath.Expand(_downloadFolderTextBox.Text),
             AutoOpenDetailsWindow = _autoOpenDetailsCheckBox.Checked,
             ShowCompletionWindow = _showCompletionCheckBox.Checked,
+            MonitorClipboard = _monitorClipboardCheckBox.Checked,
+            // Normalised on the way in, so what is saved is what is used.
+            ClipboardFileTypes = string.Join(' ', ClipboardLinks.ParseFileTypes(_clipboardTypesTextBox.Text)),
             StartWithWindows = _startWithWindowsCheckBox.Checked,
             StartMinimized = _startMinimizedCheckBox.Checked,
             BrowserIntegrationEnabled = _browserIntegrationCheckBox.Checked,

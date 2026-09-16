@@ -106,6 +106,12 @@ public sealed class MainForm : Form
 
     private TrayIconController _trayIcon = null!;
 
+    /// <summary>Listening only while Options says to — see <see cref="SyncClipboardWatcher"/>.</summary>
+    private readonly ClipboardWatcher _clipboardWatcher = new();
+
+    /// <summary>The last link offered, so copying it twice does not offer it twice.</summary>
+    private string? _lastClipboardOffer;
+
     /// <summary>
     /// Every secondary window this one has opened — details, completion and Add
     /// Download windows. None of them is <em>owned</em> by this form (that is
@@ -182,9 +188,12 @@ public sealed class MainForm : Form
         UpdateCommandStates();
 
         _animationTimer.Tick += (_, _) => OnAnimationTick();
+        _clipboardWatcher.Changed += (_, _) => OnClipboardChanged();
+        SyncClipboardWatcher();
         FormClosed += (_, _) =>
         {
             _animationTimer.Dispose();
+            _clipboardWatcher.Dispose();
             _trayIcon.Dispose();
         };
     }
@@ -1667,6 +1676,43 @@ public sealed class MainForm : Form
     {
         using var settingsForm = new SettingsForm(_settingsService, _browserIntegration);
         settingsForm.ShowDialog(this);
+
+        // Here rather than as another SettingsChanged subscriber: this window is
+        // the only thing that can change the setting, and it has just closed.
+        SyncClipboardWatcher();
+    }
+
+    private void SyncClipboardWatcher() => _clipboardWatcher.SetListening(_settingsService.Current.MonitorClipboard);
+
+    /// <summary>
+    /// Something was copied. Only a clipboard holding a single link to one of the
+    /// chosen file types is looked at any further (<see cref="ClipboardLinks"/>),
+    /// and a link that is already a download here — including one copied from
+    /// QuickByte's own details window — is not offered back.
+    /// </summary>
+    private void OnClipboardChanged()
+    {
+        if (!_settingsService.Current.MonitorClipboard) return;
+
+        string? text;
+        try
+        {
+            text = Clipboard.ContainsText() ? Clipboard.GetText() : null;
+        }
+        catch
+        {
+            return; // another program is holding the clipboard open
+        }
+
+        var types = ClipboardLinks.ParseFileTypes(_settingsService.Current.ClipboardFileTypes);
+        if (ClipboardLinks.FindDownloadLink(text, types) is not { } link) return;
+        if (link == _lastClipboardOffer) return;
+
+        string address = UrlCredentials.Extract(link).Url;
+        if (_downloadManager.Downloads.Any(item => string.Equals(item.Url, address, StringComparison.Ordinal))) return;
+
+        _lastClipboardOffer = link;
+        _trayIcon.OfferClipboardLink(link, FileNameHelper.FileNameFromUrl(address));
     }
 
     /// <summary>
@@ -1798,6 +1844,7 @@ public sealed class MainForm : Form
         // so asking for it from the tray no longer means asking for the main
         // window too.
         _trayIcon.AddUrlRequested += (_, _) => OnAddDownloadClicked();
+        _trayIcon.ClipboardLinkAccepted += (_, link) => OnAddDownloadClicked(link);
         _trayIcon.PauseAllRequested += (_, _) => PauseEverything();
         _trayIcon.ResumeAllRequested += (_, _) => ResumeAll();
         _trayIcon.ExitRequested += (_, _) => ExitApplication();

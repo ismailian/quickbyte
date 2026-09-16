@@ -790,6 +790,16 @@ Every window is styled after classic IDM, on a single flat palette defined in
   `download.php` were given the same path and the second to finish replaced
   the first. `DownloadManager.AddDownloadAsync` now also steps past any name an
   unfinished download has claimed, under a lock.
+- **Clipboard watching** (*Options > Interface*, off by default) — copy a link to
+  a file type on your list (`zip rar 7z iso exe msi mp4 …`, editable) and a
+  notification offers the download; clicking it opens Add Download. A
+  notification rather than a window, because you were in the middle of copying
+  something and a window taking focus would catch your next keystrokes. Only a
+  clipboard holding exactly one link and nothing else is looked at
+  (`ClipboardLinks`), nothing is kept, a link that is already a download is not
+  offered back, and nothing is listening at all until the option is on. It uses
+  Windows' clipboard change notification rather than polling, which would hold
+  the clipboard open and get in other programs' way.
 - **Sign In** — a small modal that appears only when a server answers a probe
   with a `401` or an FTP `530`. It names the host, repeats what the server
   said, and hands the login straight back to the fetch that was refused.

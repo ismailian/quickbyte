@@ -37,6 +37,9 @@ public sealed class TrayIconController : IDisposable
 
     private bool _hintShown;
 
+    /// <summary>The copied link the balloon on screen is offering, if it is offering one.</summary>
+    private string? _offeredLink;
+
     /// <summary>The user asked for the main window back (tray double-click or "Open QuickByte").</summary>
     public event EventHandler? OpenRequested;
     public event EventHandler? AddUrlRequested;
@@ -45,6 +48,9 @@ public sealed class TrayIconController : IDisposable
 
     /// <summary>The user chose Exit — the only path that closes the application for real.</summary>
     public event EventHandler? ExitRequested;
+
+    /// <summary>The user clicked a clipboard offer; the argument is the link it offered.</summary>
+    public event EventHandler<string>? ClipboardLinkAccepted;
 
     public TrayIconController(IDownloadManager downloadManager)
     {
@@ -81,6 +87,26 @@ public sealed class TrayIconController : IDisposable
             Visible = true
         };
         _notifyIcon.DoubleClick += (_, _) => OpenRequested?.Invoke(this, EventArgs.Empty);
+
+        // One balloon at a time is all Windows shows, so the click belongs to
+        // whichever was raised last — a hint clears the offer it replaced.
+        _notifyIcon.BalloonTipClicked += (_, _) =>
+        {
+            if (_offeredLink is { } link) ClipboardLinkAccepted?.Invoke(this, link);
+            _offeredLink = null;
+        };
+        _notifyIcon.BalloonTipClosed += (_, _) => _offeredLink = null;
+    }
+
+    /// <summary>
+    /// Offers a copied link as a notification rather than a window: the user is in
+    /// the middle of something else, copying, and a window taking focus would land
+    /// their next keystrokes in QuickByte. Clicking it opens Add Download.
+    /// </summary>
+    public void OfferClipboardLink(string link, string fileName)
+    {
+        _offeredLink = link;
+        _notifyIcon.ShowBalloonTip(8000, "Download with QuickByte?", $"{fileName}\nClick to add this download.", ToolTipIcon.Info);
     }
 
     private static ToolStripMenuItem MenuItem(string text, Image icon, EventHandler onClick)
@@ -147,6 +173,7 @@ public sealed class TrayIconController : IDisposable
     {
         if (_hintShown) return;
         _hintShown = true;
+        _offeredLink = null;
         _notifyIcon.ShowBalloonTip(4000, title, body, ToolTipIcon.Info);
     }
 
