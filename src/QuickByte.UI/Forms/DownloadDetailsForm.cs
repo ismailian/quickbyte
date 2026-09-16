@@ -36,6 +36,7 @@ public sealed class DownloadDetailsForm : Form
     private readonly Dictionary<int, ListViewItem> _connectionRowsById = new();
     private readonly ProgressAnimator<int> _connectionProgress = new();
     private readonly System.Windows.Forms.Timer _animationTimer = new() { Interval = ProgressAnimation.FrameIntervalMilliseconds };
+    private readonly TaskbarProgress _taskbarProgress;
 
     private BufferedLabel _fileNameLabel = null!;
     private BufferedLabel _urlLabel = null!;
@@ -64,6 +65,10 @@ public sealed class DownloadDetailsForm : Form
         _item = item;
         _downloadManager = downloadManager;
 
+        // Before the first refresh: this window is not shown yet, so the report
+        // it makes below is cached and applied once the taskbar button exists.
+        _taskbarProgress = TaskbarProgress.AttachTo(this);
+
         BuildUi();
         WireEvents();
         RefreshStaticFields();
@@ -74,6 +79,7 @@ public sealed class DownloadDetailsForm : Form
         {
             _animationTimer.Dispose();
             _toolTip.Dispose();
+            _taskbarProgress.Dispose();
         };
     }
 
@@ -636,6 +642,12 @@ public sealed class DownloadDetailsForm : Form
         Text = _item.Status == DownloadStatus.Completed
             ? $"Complete — {_item.FileName}"
             : $"{ByteFormatter.FormatPercentage(percentage)}  {_item.FileName}";
+
+        // The same number again on this window's taskbar button, so a minimised
+        // download still reads at a glance. Reported from here rather than from
+        // the progress handler because a status change moves it too — a pause
+        // turns the bar yellow without a byte arriving.
+        _taskbarProgress.Report(TaskbarProgress.StateFor(_item.Status, total > 0, percentage), percentage);
     }
 
     private static string StatusText(DownloadStatus status) => status switch

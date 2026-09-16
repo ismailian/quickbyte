@@ -594,7 +594,10 @@ Every window is styled after classic IDM, on a single flat palette defined in
   status/size/downloaded/speed/ETA/connections/resumable fields, an overall
   progress bar, a collapsible "Hide details" section, the segmented "start
   positions and download progress by connections" bar, and a connections grid
-  (#, Downloaded, Progress, Info).
+  (#, Downloaded, Progress, Info). Its **taskbar button carries the same
+  progress** — green while transferring, yellow when paused, red on failure, and
+  a marquee while connecting or when the server never gave a size — so a
+  minimised download can still be read at a glance.
 - **Download complete window** — replaces the details window when a transfer
   finishes: final size, average speed, destination folder, and Open File /
   Open Folder actions. Opting out of it from the checkbox is persisted.
