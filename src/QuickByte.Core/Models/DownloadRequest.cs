@@ -33,4 +33,11 @@ public sealed record DownloadRequest(
 
     /// <summary>A checksum the finished file must match; see <see cref="Helpers.FileChecksum"/>.</summary>
     public Helpers.ExpectedChecksum? ExpectedChecksum { get; init; }
+
+    /// <summary>
+    /// The quality chosen for a streaming video, or null for an ordinary file. Its
+    /// <see cref="StreamSource.AudioFileName"/> is ignored: the manager names the
+    /// sound file when it names the video.
+    /// </summary>
+    public StreamSource? Stream { get; init; }
 }

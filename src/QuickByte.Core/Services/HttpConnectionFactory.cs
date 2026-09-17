@@ -13,7 +13,7 @@ namespace QuickByte.Core.Services;
 /// </summary>
 public sealed class HttpConnectionFactory : IConnectionFactory
 {
-    private static readonly HttpClient SharedClient = CreateClient();
+    internal static readonly HttpClient SharedClient = CreateClient();
 
     private static HttpClient CreateClient()
     {

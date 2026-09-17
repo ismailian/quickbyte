@@ -89,3 +89,27 @@ document.addEventListener(
   },
   true // capture phase: ahead of the page's own click handlers
 );
+
+// ---------------------------------------------------------------- streams --
+//
+// A video player fetches its playlist (.m3u8) or manifest (.mpd) before any of the
+// video, and the page's own resource timeline records the address. Watching that
+// needs no permission beyond the page access this script already has — no
+// webRequest — and it sees what the player actually asked for rather than what
+// the page merely links to. The background script keeps the list for the popup.
+
+function reportStreams(entries) {
+  const urls = entries.map((entry) => entry.name).filter(qbIsStreamManifest);
+  if (urls.length === 0) return;
+
+  qbApi.runtime.sendMessage({ type: "qb-streams", urls }).catch(() => {
+    // The background script is being restarted; the next playlist reports again.
+  });
+}
+
+try {
+  new PerformanceObserver((list) => reportStreams(list.getEntries()))
+    .observe({ type: "resource", buffered: true });
+} catch {
+  // A page that forbids the observer lists no videos, and nothing else changes.
+}

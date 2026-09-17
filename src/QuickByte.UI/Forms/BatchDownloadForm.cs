@@ -47,7 +47,6 @@ public sealed class BatchDownloadForm : Form
 
     /// <summary>Set once the user edits Save to; until then each file goes to its category's folder.</summary>
     private bool _saveFolderChosen;
-    private bool _settingSaveFolder;
 
     /// <summary>The downloads to add, set only when the user confirms; its presence is the confirmation.</summary>
     public IReadOnlyList<DownloadRequest>? Results { get; private set; }
@@ -175,7 +174,8 @@ public sealed class BatchDownloadForm : Form
         layout.Controls.Add(FormChrome.FieldLabel("Save to"), 0, row);
         _saveFolderTextBox = FormChrome.Field();
         _saveFolderTextBox.Text = UserPath.Shorten(_settingsService.Current.DefaultDownloadFolder);
-        _saveFolderTextBox.TextChanged += (_, _) => { if (!_settingSaveFolder) _saveFolderChosen = true; };
+        // Attached after the default is written, so any change from here on is the user's.
+        _saveFolderTextBox.TextChanged += (_, _) => _saveFolderChosen = true;
         if (_settingsService.Current.SortIntoCategoryFolders)
             new ToolTip().SetToolTip(_saveFolderTextBox, "Each file goes to its category's folder unless you change this.");
         layout.Controls.Add(_saveFolderTextBox, 1, row);

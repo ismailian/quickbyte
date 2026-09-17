@@ -1,5 +1,6 @@
 using System.Threading;
 using System.Collections.Concurrent;
+using System.Net.Http;
 using QuickByte.Core.Enums;
 using QuickByte.Core.Events;
 using QuickByte.Core.Helpers;
@@ -26,6 +27,7 @@ public sealed class DownloadManager : IDownloadManager
     private readonly IFileMerger _fileMerger;
     private readonly IDispatcher _dispatcher;
     private readonly bool _markDownloadsFromInternet;
+    private readonly HttpClient _streamClient;
 
     private readonly ConcurrentDictionary<Guid, IDownloadService> _services = new();
     private readonly ConcurrentDictionary<Guid, DownloadItem> _items = new();
@@ -65,8 +67,13 @@ public sealed class DownloadManager : IDownloadManager
         IConnectionFactory connectionFactory,
         IFileMerger fileMerger,
         IDispatcher dispatcher,
-        bool markDownloadsFromInternet = true)
+        bool markDownloadsFromInternet = true,
+        HttpClient? streamClient = null)
     {
+        // Streaming videos fetch their pieces through the same shared client the
+        // connections use; a parameter only so a test can hand them a stub server.
+        _streamClient = streamClient ?? HttpConnectionFactory.SharedClient;
+
         // Whether finished files are tagged with the Mark of the Web — see
         // MarkOfTheWeb. A parameter rather than a setting: the only reason to
         // turn it off is the Windows policy that turns it off for the browsers,
@@ -213,6 +220,7 @@ public sealed class DownloadManager : IDownloadManager
             // A file that is not on disk yet can still be spoken for: every
             // unfinished download in the list will write its name when it merges.
             string finalPath = FileNameHelper.GetAvailableFilePath(request.SaveFolder, safeName, IsReservedByADownload);
+            var stream = request.Stream is null ? null : NameAudioFile(request.Stream, finalPath);
 
             item = new DownloadItem
             {
@@ -220,12 +228,15 @@ public sealed class DownloadManager : IDownloadManager
                 FileName = Path.GetFileName(finalPath),
                 SaveFolder = request.SaveFolder,
                 ContentType = request.FileInfo.ContentType,
-                TotalBytes = request.FileInfo.ContentLength,
+                // A stream's probe described its playlist, not the video: the size
+                // is known once the pieces are down, and every piece resumes.
+                TotalBytes = stream is null ? request.FileInfo.ContentLength : 0,
                 ConnectionsCount = _settingsService.Current.ClampConnections(request.ConnectionsCount),
-                SupportsResume = request.FileInfo.SupportsRangeRequests,
-                BypassCache = request.FileInfo.BypassCache,
-                RemoteVersion = request.FileInfo.Version,
-            ExpectedChecksum = request.ExpectedChecksum?.ToString(),
+                SupportsResume = stream is not null || request.FileInfo.SupportsRangeRequests,
+                BypassCache = stream is null && request.FileInfo.BypassCache,
+                RemoteVersion = stream is null ? request.FileInfo.Version : null,
+                ExpectedChecksum = request.ExpectedChecksum?.ToString(),
+                Stream = stream,
                 Status = DownloadStatus.Queued,
                 TempFolderPath = Path.Combine(_settingsService.Current.TempFolder, Guid.NewGuid().ToString("N")),
                 Credentials = request.Credentials?.Clone(),
@@ -260,10 +271,31 @@ public sealed class DownloadManager : IDownloadManager
         foreach (var existing in _items.Values)
         {
             if (existing.Status is DownloadStatus.Completed or DownloadStatus.Cancelled) continue;
-            if (string.Equals(NormalizePath(existing.FullPath), NormalizePath(path), StringComparison.OrdinalIgnoreCase))
-                return true;
+            if (SamePath(existing.FullPath, path)) return true;
+            if (existing.AudioFullPath is { } audio && SamePath(audio, path)) return true;
         }
         return false;
+    }
+
+    private static bool SamePath(string a, string b) =>
+        string.Equals(NormalizePath(a), NormalizePath(b), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Names a stream's separate sound after its video — "Talk.mp4" and
+    /// "Talk.audio.m4a" — under the same rule as the video's own name, so it can
+    /// neither replace a file nor be written by two downloads. Called under
+    /// <see cref="_addLock"/>.
+    /// </summary>
+    private StreamSource NameAudioFile(StreamSource source, string videoPath)
+    {
+        if (!source.HasSeparateAudio) return source with { AudioFileName = null };
+
+        string folder = Path.GetDirectoryName(videoPath)!;
+        string extension = source.AudioExtension is { Length: > 1 } ext && ext.StartsWith('.') ? ext : ".m4a";
+        string name = FileNameHelper.SanitizeFileName($"{Path.GetFileNameWithoutExtension(videoPath)}.audio{extension}");
+        string audioPath = FileNameHelper.GetAvailableFilePath(
+            folder, name, path => SamePath(path, videoPath) || IsReservedByADownload(path));
+        return source with { AudioFileName = Path.GetFileName(audioPath) };
     }
 
     private IDownloadService RegisterService(DownloadItem item)
@@ -277,10 +309,13 @@ public sealed class DownloadManager : IDownloadManager
         var queueSpeedLimit = new BandwidthLimiter();
         _queueSpeedLimits[item.Id] = queueSpeedLimit;
 
-        var poolManager = new ConnectionPoolManager(
-            _connectionFactory, new CompositeBandwidthLimiter(speedLimit, queueSpeedLimit, _globalSpeedLimit));
-        var service = new DownloadService(
-            item, poolManager, _fileMerger, _fileInfoProvider, _settingsService, PersistItem, _markDownloadsFromInternet);
+        var limiter = new CompositeBandwidthLimiter(speedLimit, queueSpeedLimit, _globalSpeedLimit);
+        IDownloadService service = item.Stream is not null
+            ? new StreamDownloadService(
+                item, _streamClient, _fileMerger, _settingsService, PersistItem, limiter, _markDownloadsFromInternet)
+            : new DownloadService(
+                item, new ConnectionPoolManager(_connectionFactory, limiter),
+                _fileMerger, _fileInfoProvider, _settingsService, PersistItem, _markDownloadsFromInternet);
 
         service.ProgressChanged += (_, e) => _dispatcher.Post(() => ProgressChanged?.Invoke(this, e));
         service.StatusChanged += (_, e) => _dispatcher.Post(() => StatusChanged?.Invoke(this, e));
@@ -383,6 +418,7 @@ public sealed class DownloadManager : IDownloadManager
             if (deleteFile)
             {
                 try { if (File.Exists(item.FullPath)) File.Delete(item.FullPath); } catch { /* best-effort */ }
+                try { if (item.AudioFullPath is { } audio && File.Exists(audio)) File.Delete(audio); } catch { /* best-effort */ }
             }
             PersistAll();
             DownloadListChanged?.Invoke(this, new DownloadListChangedEventArgs { ChangeType = DownloadListChangeType.Removed, Item = item });

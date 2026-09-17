@@ -259,6 +259,59 @@ public sealed class DownloadManagerTests
     }
 
     [Fact]
+    public async Task A_stream_is_run_by_the_stream_engine_with_its_sound_named_after_the_video()
+    {
+        using var fixture = new Fixture();
+
+        var item = await fixture.AddStreamAsync("Talk.mp4");
+
+        Assert.IsType<StreamDownloadService>(fixture.Manager.GetService(item.Id));
+        Assert.Equal("Talk.audio.m4a", item.Stream!.AudioFileName);
+        Assert.Equal(Path.Combine(fixture.Downloads, "Talk.audio.m4a"), item.AudioFullPath);
+        Assert.IsType<DownloadService>(fixture.Manager.GetService((await fixture.AddAsync()).Id));
+    }
+
+    [Fact]
+    public async Task Two_streams_of_the_same_name_never_share_a_video_or_a_sound_file()
+    {
+        using var fixture = new Fixture();
+        File.WriteAllText(Path.Combine(fixture.Downloads, "Talk (1).audio.m4a"), "someone else's");
+
+        var first = await fixture.AddStreamAsync("Talk.mp4");
+        var second = await fixture.AddStreamAsync("Talk.mp4");
+
+        Assert.Equal("Talk (1).mp4", second.FileName);
+        Assert.Equal("Talk (1).audio (1).m4a", second.Stream!.AudioFileName);
+        Assert.NotEqual(first.AudioFullPath, second.AudioFullPath);
+    }
+
+    [Fact]
+    public async Task A_file_already_named_like_a_streams_sound_is_not_replaced_by_it()
+    {
+        using var fixture = new Fixture();
+
+        // Another download will write "Clip.audio.m4a" as its own video.
+        await fixture.AddAsync(fileName: "Clip.audio.m4a");
+        var stream = await fixture.AddStreamAsync("Clip.mp4");
+
+        Assert.Equal("Clip.audio (1).m4a", stream.Stream!.AudioFileName);
+    }
+
+    [Fact]
+    public async Task Removing_a_stream_can_take_its_sound_with_it()
+    {
+        using var fixture = new Fixture();
+        var item = await fixture.AddStreamAsync("Talk.mp4");
+        File.WriteAllText(item.FullPath, "video");
+        File.WriteAllText(item.AudioFullPath!, "sound");
+
+        fixture.Manager.Remove(item.Id, deleteFile: true);
+
+        Assert.False(File.Exists(item.FullPath));
+        Assert.False(File.Exists(item.AudioFullPath));
+    }
+
+    [Fact]
     public void Removing_something_that_is_not_there_is_harmless()
     {
         using var fixture = new Fixture();
@@ -612,6 +665,21 @@ public sealed class DownloadManagerTests
                 StartImmediately = startImmediately,
                 Credentials = credentials,
                 Headers = headers
+            });
+
+        public Task<DownloadItem> AddStreamAsync(string fileName) =>
+            Manager.AddDownloadAsync(new DownloadRequest(
+                "https://example.com/master.m3u8", Info, Downloads, fileName, 4)
+            {
+                StartImmediately = false,
+                Stream = new StreamSource
+                {
+                    Format = StreamFormat.Hls,
+                    MainPlaylistUrl = "https://example.com/1080.m3u8",
+                    AudioPlaylistUrl = "https://example.com/audio.m3u8",
+                    AudioExtension = ".m4a",
+                    AudioFileName = "ignored.m4a"
+                }
             });
 
         public void Dispose() => _root.Dispose();

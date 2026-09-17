@@ -52,8 +52,9 @@ call, a callback, or the two manifests drifting apart.
 node --test "browser/tests/*.test.mjs"
 ```
 
-covers the capture rules, the namespace choice, site access and the settings
-migration. The package itself — manifests, packaged files, the namespace rule —
+covers the capture rules, the namespace choice, site access, the settings
+migration and the stream helpers (which addresses are playlists, the per-tab
+list, the file name taken from a page title). The package itself — manifests, packaged files, the namespace rule —
 is checked by `ExtensionPackageTests` in the ordinary `dotnet test` run.
 
 ## Pair it with QuickByte
@@ -86,6 +87,14 @@ Two hooks, catching different things:
   first and asks QuickByte afterwards — and if QuickByte is not running, the
   navigation is put back, so the browser downloads the file itself a moment
   later exactly as it would have.
+
+**Videos on this page.** A video player loads a playlist (`.m3u8`) or manifest
+(`.mpd`) before any of the video. `content.js` notices those addresses in the
+page's resource timeline — no extra permission — and the toolbar badge counts
+them. The popup lists them with a **Download** button that opens QuickByte's Add
+Download window on the playlist, named after the page, where you pick a quality.
+The list is kept in `storage.session` (memory only) and cleared when the tab
+closes or navigates.
 
 There is also a **Download with QuickByte** entry on the right-click menu for
 links, images, video and audio. That one ignores the file-type filter: an

@@ -160,3 +160,59 @@ function qbShouldCapture(settings, url, fileName) {
 
   return false;
 }
+
+// --------------------------------------------------------------- streams --
+
+/** How many playlists one tab remembers: a player that re-requests its own must not grow the list without end. */
+const QB_MAX_STREAMS = 20;
+
+/**
+ * Whether a URL is a streaming video's playlist (HLS, .m3u8) or manifest (DASH,
+ * .mpd) — what a page's video player fetches before any of the video. QuickByte
+ * reads it and offers the qualities; the pieces the player fetches next are
+ * useless one at a time.
+ */
+function qbIsStreamManifest(url) {
+  if (!/^https?:/i.test(String(url || ""))) return false;
+  const extension = qbExtensionOf(url);
+  return extension === "m3u8" || extension === "mpd";
+}
+
+/** A tab's playlists with `url` added: newest first, each once, at most QB_MAX_STREAMS. */
+function qbRememberStream(streams, url) {
+  const rest = (streams || []).filter((known) => known !== url);
+  return [url, ...rest].slice(0, QB_MAX_STREAMS);
+}
+
+/**
+ * A file name for a stream, from the title of the page playing it — the one place
+ * its real name usually is, since a playlist is nearly always master.m3u8. The
+ * playlist's extension is kept for QuickByte to swap for the video's own, and the
+ * characters Windows refuses in a file name are dropped.
+ */
+function qbStreamFileName(title, url) {
+  const cleaned = String(title || "")
+    .replace(/[\x00-\x1f<>:"/\\|?*]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120)
+    .replace(/[. ]+$/, "");
+  return cleaned ? `${cleaned}.${qbExtensionOf(url) || "m3u8"}` : "";
+}
+
+/** How a playlist is listed in the popup: the end of its path, and its host. */
+function qbStreamLabel(url) {
+  try {
+    const { hostname, pathname } = new URL(url);
+    const tail = pathname.split("/").filter(Boolean).slice(-2).join("/");
+    let readable = tail;
+    try {
+      readable = decodeURIComponent(tail);
+    } catch {
+      // A malformed escape: shown as it came.
+    }
+    return `${readable} · ${hostname}`;
+  } catch {
+    return String(url);
+  }
+}

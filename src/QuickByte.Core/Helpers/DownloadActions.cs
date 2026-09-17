@@ -47,7 +47,11 @@ public static class DownloadActions
     /// refreshed address is for. Not while it runs: the connections are reading
     /// the old address, and the run's probe describes the old server.
     /// </summary>
-    public static bool CanRefreshAddress(DownloadItem item) => CanResume(item);
+    /// <summary>
+    /// Not for a stream: its playlist is read afresh on every run, which is what
+    /// refreshing would do, and a size comparison could not vouch for a new one.
+    /// </summary>
+    public static bool CanRefreshAddress(DownloadItem item) => item.Stream is null && CanResume(item);
 
     public static bool CanOpenFile(DownloadItem item) =>
         item.Status == DownloadStatus.Completed && File.Exists(item.FullPath);

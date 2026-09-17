@@ -105,6 +105,9 @@ foreach (int size in new[] { 16, 32, 48, 128 })
 >   resume and retry.
 > • Sends the cookies and referrer of the page the link came from, so files
 >   behind a sign-in download correctly rather than saving the login page.
+> • Spots the video playlists (HLS and DASH) a page's player loads and lists
+>   them in the toolbar popup, so a streaming video can be saved in the quality
+>   you choose.
 > • Right-click any link, image, video or audio and choose
 >   "Download with QuickByte".
 > • Choose which file types to take over, or take over everything, and exclude
@@ -134,9 +137,9 @@ mandatory and a vague answer is the most common reason a review stalls.
 |---|---|
 | `downloads` | The extension's entire function is to take a download over. It needs this to be notified when Chrome starts one, and to cancel the Chrome-side download once QuickByte has accepted the hand-off. Without it there is nothing to intercept. |
 | `cookies` | A download link on a signed-in page usually only resolves for that session. The extension reads the cookies Chrome would itself have sent for that exact URL and passes them to QuickByte, so the file downloads instead of a sign-in page. Cookies are read for the download's own URL only, at the moment of hand-off, and are sent only to 127.0.0.1. |
-| `storage` | Stores the user's settings on this machine: the pairing token for the local QuickByte install, its port, and which file types to take over. `chrome.storage.local`, never `sync` — the token is specific to one QuickByte install on one computer. |
+| `storage` | Stores the user's settings on this machine: the pairing token for the local QuickByte install, its port, and which file types to take over. `chrome.storage.local`, never `sync` — the token is specific to one QuickByte install on one computer. `storage.session` (memory only) holds the video playlist addresses the current tabs have loaded, for the popup's list; it is never written to disk. |
 | `contextMenus` | Adds a single "Download with QuickByte" entry to the right-click menu for links, images, video and audio. |
-| `http://*/*`, `https://*/*` (host permissions) | Two needs, both unavoidable for a general-purpose download manager: reading the cookies for whatever site a download came from, and running a small content script that catches a click on a download link before Chrome begins fetching it. The user chooses which sites to exclude in the options page. |
+| `http://*/*`, `https://*/*` (host permissions) | Two needs, both unavoidable for a general-purpose download manager: reading the cookies for whatever site a download came from, and running a small content script that catches a click on a download link before Chrome begins fetching it, and notices the video playlist a page's player loads so the popup can offer it. The user chooses which sites to exclude in the options page. |
 | Remote code | None. The extension loads no remote script; every file is in the package. |
 
 ## Data-use disclosures
@@ -150,7 +153,10 @@ here, and saying so plainly is what gets a `cookies` request through review:
   never sent off the machine, never stored by the extension, and never sent to
   the developer or a third party.
 - **Web history** — not collected. The extension acts on the URL of a download
-  as it starts and keeps no record of it.
+  as it starts and keeps no record of it. The addresses of video playlists a tab
+  has loaded are held in memory for that tab's popup and dropped when it closes
+  or navigates; one is sent to QuickByte on `127.0.0.1` only when the user clicks
+  Download.
 - **User activity / location / health / financial** — not collected.
 
 Tick all three certifications: no sale of data, no use unrelated to the single

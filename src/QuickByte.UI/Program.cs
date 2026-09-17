@@ -2,6 +2,7 @@ using System.Threading;
 using System.Windows.Forms;
 using QuickByte.Core.Interfaces;
 using QuickByte.Core.Services;
+using QuickByte.Core.Streaming;
 using QuickByte.UI.Controls;
 using QuickByte.UI.Forms;
 
@@ -55,6 +56,7 @@ internal static class Program
             var connectionFactory = new ProtocolConnectionFactory();
 
             IUpdateService updateService = new UpdateService();
+            IStreamResolver streamResolver = new StreamResolver();
             var fileMerger = new FileMerger();
 
             // Explicitly install a WinForms sync context so background threads
@@ -110,7 +112,7 @@ internal static class Program
 
             var mainForm = new MainForm(
                 downloadManager, queueManager, settingsService, updateService, fileInfoProvider,
-                browserIntegration, startMinimized);
+                streamResolver, browserIntegration, startMinimized);
 
             // The pipe listener raises this on a thread-pool thread, so it goes
             // through the same dispatcher Core's events do rather than touching

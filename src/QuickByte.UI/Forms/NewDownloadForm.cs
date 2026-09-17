@@ -4,6 +4,7 @@ using QuickByte.Core.Exceptions;
 using QuickByte.Core.Helpers;
 using QuickByte.Core.Interfaces;
 using QuickByte.Core.Models;
+using QuickByte.Core.Streaming;
 using QuickByte.UI.Controls;
 
 namespace QuickByte.UI.Forms;
@@ -29,6 +30,13 @@ public sealed class NewDownloadForm : Form
 {
     private readonly ISettingsService _settingsService;
     private readonly IRemoteFileInfoProvider _fileInfoProvider;
+
+    /// <summary>
+    /// Reads a streaming video's playlist, when the address turns out to be one. Null
+    /// only where a caller has no use for it; the fetch then treats a playlist as the
+    /// text file it technically is.
+    /// </summary>
+    private readonly IStreamResolver? _streamResolver;
 
     /// <summary>
     /// Headers captured alongside a link handed over by the browser extension
@@ -57,9 +65,18 @@ public sealed class NewDownloadForm : Form
     private ConnectionCountBox _connectionsBox = null!;
     private ComboBox _queueComboBox = null!;
     private TextBox _checksumTextBox = null!;
+    private ComboBox _qualityComboBox = null!;
+    private TableLayoutPanel _layout = null!;
     private Button _okButton = null!;
 
     private RemoteFileInfo? _fetchedInfo;
+
+    /// <summary>The qualities the address offers when it is a streaming video; null for an ordinary file.</summary>
+    private StreamDescription? _stream;
+
+    private const int QualityRow = 3;
+    private const int QualityRowHeight = 38;
+    private const int BaseHeight = 610;
 
     /// <summary>
     /// Set once the user has typed in or browsed to a Save to folder. Until then the
@@ -114,10 +131,12 @@ public sealed class NewDownloadForm : Form
         IRemoteFileInfoProvider fileInfoProvider,
         string? initialUrl = null,
         CapturedDownload? captured = null,
-        IReadOnlyList<DownloadQueue>? queues = null)
+        IReadOnlyList<DownloadQueue>? queues = null,
+        IStreamResolver? streamResolver = null)
     {
         _settingsService = settingsService;
         _fileInfoProvider = fileInfoProvider;
+        _streamResolver = streamResolver;
         _queues = queues ?? Array.Empty<DownloadQueue>();
         _capturedHeaders = captured?.ToHeaders();
         _preferredFileName = string.IsNullOrWhiteSpace(captured?.FileName)
@@ -167,8 +186,9 @@ public sealed class NewDownloadForm : Form
         Text = "Add New Download";
         Width = 580;
         // 34 px shorter than it was: the login row it used to carry is a dialog
-        // of its own now, shown only when a server asks for a login.
-        Height = 610;
+        // of its own now, shown only when a server asks for a login. The quality
+        // row adds its height back only for a streaming video.
+        Height = BaseHeight;
         // Shown modeless and unowned by MainForm, so it is a window in its own
         // right: it gets a taskbar button, it can be minimised out of the way
         // while the fetch runs, and CenterParent would have no parent to centre
@@ -198,7 +218,7 @@ public sealed class NewDownloadForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 3,
-            RowCount = 9,
+            RowCount = 10,
             BackColor = Theme.Surface,
             AutoSize = false
         };
@@ -206,10 +226,12 @@ public sealed class NewDownloadForm : Form
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
 
-        // Address · status · info card · save as · save to · connections · queue,
-        // then a percent-sized filler — without it the last real row swallows all
-        // the leftover height and its label floats out of line with its field.
-        foreach (int height in new[] { 38, 26, 80, 38, 38, 38, 38, 38 })
+        // Address · status · info card · quality · save as · save to · connections ·
+        // queue · checksum, then a percent-sized filler — without it the last real
+        // row swallows all the leftover height and its label floats out of line
+        // with its field. Quality is collapsed to nothing until a stream is found.
+        _layout = layout;
+        foreach (int height in new[] { 38, 26, 80, 0, 38, 38, 38, 38, 38 })
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
@@ -257,6 +279,29 @@ public sealed class NewDownloadForm : Form
         infoCard.Controls.Add(infoGrid);
         layout.Controls.Add(infoCard, 0, row);
         layout.SetColumnSpan(infoCard, 3);
+        row++;
+
+        // --- Quality (streaming video only) ---------------------------------------
+        var qualityLabel = FormChrome.FieldLabel("Quality");
+        layout.Controls.Add(qualityLabel, 0, row);
+        _qualityComboBox = new ComboBox
+        {
+            Dock = DockStyle.Fill,
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Theme.Surface,
+            ForeColor = Theme.Text,
+            Font = Theme.Ui,
+            Margin = new Padding(0, 6, 0, 6),
+            FormattingEnabled = true,
+            Visible = false
+        };
+        qualityLabel.Visible = false;
+        _qualityComboBox.VisibleChanged += (_, _) => qualityLabel.Visible = _qualityComboBox.Visible;
+        _qualityComboBox.Format += (_, e) => { if (e.ListItem is StreamChoice choice) e.Value = choice.Label; };
+        _qualityComboBox.SelectedIndexChanged += (_, _) => OnQualityChanged();
+        layout.Controls.Add(_qualityComboBox, 1, row);
+        layout.SetColumnSpan(_qualityComboBox, 2);
         row++;
 
         // --- Save as ----------------------------------------------------------
@@ -442,6 +487,18 @@ public sealed class NewDownloadForm : Form
 
             _fileNameTextBox.Text = _preferredFileName ?? _fetchedInfo.FileName;
 
+            if (_streamResolver is not null
+                && (StreamDetector.IsStream(info.FinalUrl, info.ContentType) || StreamDetector.IsStream(url, null)))
+            {
+                SetStatus("Reading the video's playlist…", Theme.TextMuted);
+                if (await TryOfferQualitiesAsync(url).ConfigureAwait(true)) return;
+                if (IsDisposed || Disposing) return;
+            }
+            else
+            {
+                ShowQualities(null);
+            }
+
             _fileTypeLabel.Text = _fetchedInfo.ContentType;
             _fileSizeLabel.Text = _fetchedInfo.HasKnownSize ? ByteFormatter.FormatBytes(_fetchedInfo.ContentLength) : "Unknown";
             _rangeSupportLabel.Text = _fetchedInfo.SupportsRangeRequests
@@ -524,6 +581,99 @@ public sealed class NewDownloadForm : Form
         await OnFetchClickedAsync().ConfigureAwait(true);
     }
 
+    /// <summary>
+    /// Reads the playlist the address turned out to be and offers its qualities.
+    /// </summary>
+    /// <returns>
+    /// True when the fetch is settled here — qualities offered, or the stream
+    /// refused. False when the address is not a playlist QuickByte can read after
+    /// all, and the caller should offer it as the file it is.
+    /// </returns>
+    private async Task<bool> TryOfferQualitiesAsync(string url)
+    {
+        try
+        {
+            var description = await _streamResolver!.DescribeAsync(url, CurrentRequestOptions(), CancellationToken.None);
+            if (IsDisposed || Disposing) return true;
+
+            // Named before the qualities are shown: choosing one swaps the extension.
+            if (_preferredFileName is null)
+                _fileNameTextBox.Text = StreamDetector.SuggestFileName(url, _fileNameTextBox.Text, string.Empty);
+
+            ShowQualities(description);
+            _rangeSupportLabel.Text = "Yes — finished pieces are kept";
+            _rangeSupportLabel.ForeColor = Theme.Success;
+            _fileSizeLabel.Text = "Not known yet";
+            _connectionsBox.Enabled = true;
+
+            string format = description.Format == StreamFormat.Hls ? "HLS" : "DASH";
+            SetStatus(
+                description.Choices.Any(c => c.Source.HasSeparateAudio)
+                    ? $"{format} video — its sound is saved as a second file."
+                    : $"{format} video — choose a quality.",
+                Theme.Success);
+            _okButton.Enabled = true;
+            return true;
+        }
+        catch (AuthenticationRequiredException ex)
+        {
+            if (IsDisposed || Disposing) return true;
+            await OnAuthenticationRequiredAsync(ex).ConfigureAwait(true);
+            return true;
+        }
+        catch (StreamNotSupportedException ex)
+        {
+            if (IsDisposed || Disposing) return true;
+            ShowQualities(null);
+            _fetchedInfo = null;
+            SetStatus(ex.Message, Theme.Danger);
+            _okButton.Enabled = false;
+            return true;
+        }
+        catch (FormatException)
+        {
+            // Named like a playlist, but not one: offered as the file it is.
+            if (IsDisposed || Disposing) return true;
+            ShowQualities(null);
+            return false;
+        }
+    }
+
+    /// <summary>Shows the quality row with <paramref name="description"/>'s choices, or collapses it.</summary>
+    private void ShowQualities(StreamDescription? description)
+    {
+        _stream = description;
+        bool show = description is not null;
+
+        _qualityComboBox.BeginUpdate();
+        _qualityComboBox.Items.Clear();
+        if (description is not null)
+        {
+            foreach (var choice in description.Choices) _qualityComboBox.Items.Add(choice);
+        }
+        _qualityComboBox.EndUpdate();
+
+        if (_qualityComboBox.Visible != show)
+        {
+            _layout.RowStyles[QualityRow].Height = show ? QualityRowHeight : 0;
+            _qualityComboBox.Visible = show;
+            Height = BaseHeight + (show ? QualityRowHeight : 0);
+        }
+
+        if (show && _qualityComboBox.Items.Count > 0) _qualityComboBox.SelectedIndex = 0;
+    }
+
+    /// <summary>The file name follows the chosen quality's container — a .ts, an .mp4, an .m4a.</summary>
+    private void OnQualityChanged()
+    {
+        if (_qualityComboBox.SelectedItem is not StreamChoice choice) return;
+
+        string name = _fileNameTextBox.Text.Trim();
+        if (name.Length == 0) name = "video";
+        _fileNameTextBox.Text = Path.GetFileNameWithoutExtension(name) + choice.Extension;
+        _fileTypeLabel.Text = $"{(_stream?.Format == StreamFormat.Dash ? "DASH" : "HLS")} · {choice.ContentType}";
+    }
+
     private void SetStatus(string text, Color color)
     {
         _statusLabel.Text = text;
@@ -581,9 +731,22 @@ public sealed class NewDownloadForm : Form
 
         SelectedQueueId = (_queueComboBox.SelectedItem as QueueChoice)?.QueueId;
 
+        // A stream's probe described its playlist. What is being added is the video,
+        // whose size nobody knows until its pieces are down.
+        var choice = _stream is null ? null : _qualityComboBox.SelectedItem as StreamChoice;
+        var info = choice is null
+            ? _fetchedInfo
+            : new RemoteFileInfo
+            {
+                FileName = _fileNameTextBox.Text.Trim(),
+                ContentType = choice.ContentType,
+                FinalUrl = _fetchedInfo.FinalUrl,
+                SupportsRangeRequests = true
+            };
+
         Result = new DownloadRequest(
             _urlTextBox.Text.Trim(),
-            _fetchedInfo,
+            info,
             UserPath.Expand(_saveFolderTextBox.Text),
             _fileNameTextBox.Text.Trim(),
             _connectionsBox.Connections)
@@ -591,7 +754,8 @@ public sealed class NewDownloadForm : Form
             Credentials = _credentials,
             Headers = _capturedHeaders,
             ExpectedChecksum = checksum,
-            StartImmediately = SelectedQueueId is null
+            StartImmediately = SelectedQueueId is null,
+            Stream = choice?.Source
         };
 
         DialogResult = DialogResult.OK;

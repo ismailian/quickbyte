@@ -129,3 +129,48 @@ test("a pairing already in local storage is never overwritten from sync", async 
   assert.equal(loaded.token, "local");
   assert.equal(local.data.token, "local");
 });
+
+// ------------------------------------------------------------------- streams --
+
+test("a video player's playlist or manifest is recognised by its path, whatever the query", () => {
+  const context = load({ chrome: {} });
+  assert.equal(run(context, 'qbIsStreamManifest("https://cdn.example.com/v/master.m3u8?token=abc")'), true);
+  assert.equal(run(context, 'qbIsStreamManifest("https://cdn.example.com/v/manifest.MPD")'), true);
+  assert.equal(run(context, 'qbIsStreamManifest("https://cdn.example.com/v/segment-12.ts")'), false);
+  assert.equal(run(context, 'qbIsStreamManifest("https://example.com/watch?list=a.m3u8")'), false);
+  assert.equal(run(context, 'qbIsStreamManifest("blob:https://example.com/5b1f")'), false);
+  assert.equal(run(context, 'qbIsStreamManifest("file:///C:/videos/local.m3u8")'), false);
+});
+
+test("a tab remembers each playlist once, newest first, and only so many", () => {
+  const context = load({ chrome: {} });
+  let list = [];
+  context.remember = (url) => { context.list = list; list = run(context, `qbRememberStream(list, ${JSON.stringify(url)})`); };
+
+  context.remember("https://a.example.com/1.m3u8");
+  context.remember("https://a.example.com/2.m3u8");
+  context.remember("https://a.example.com/1.m3u8");
+  assert.deepEqual([...list], ["https://a.example.com/1.m3u8", "https://a.example.com/2.m3u8"]);
+
+  for (let i = 0; i < 50; i++) context.remember(`https://a.example.com/r${i}.m3u8`);
+  assert.equal(list.length, run(context, "QB_MAX_STREAMS"));
+  assert.equal(list[0], "https://a.example.com/r49.m3u8");
+});
+
+test("a stream is named after its page, without the characters Windows refuses", () => {
+  const context = load({ chrome: {} });
+  assert.equal(
+    run(context, 'qbStreamFileName("Keynote: What\'s <new> in 2026? | Example", "https://x.example.com/master.m3u8")'),
+    "Keynote What's new in 2026 Example.m3u8");
+  assert.equal(run(context, 'qbStreamFileName("Talk...", "https://x.example.com/manifest.mpd")'), "Talk.mpd");
+  assert.equal(run(context, 'qbStreamFileName("   ", "https://x.example.com/master.m3u8")'), "");
+  assert.equal(run(context, 'qbStreamFileName("A".repeat(300), "https://x.example.com/a.m3u8").length'), 125);
+});
+
+test("a playlist is listed by the end of its path and its host", () => {
+  const context = load({ chrome: {} });
+  assert.equal(
+    run(context, 'qbStreamLabel("https://cdn.example.com/show/Launch%20Day/master.m3u8?sig=1")'),
+    "Launch Day/master.m3u8 · cdn.example.com");
+  assert.equal(run(context, 'qbStreamLabel("https://cdn.example.com/bad%E0%A4%A/x.mpd")'), "bad%E0%A4%A/x.mpd · cdn.example.com");
+});

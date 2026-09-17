@@ -169,6 +169,15 @@ public sealed class DownloadActionsTests
     public void CanRefreshAddress_is_never_offered_while_connections_read_the_old_one(DownloadStatus status, bool expected) =>
         Assert.Equal(expected, DownloadActions.CanRefreshAddress(With(status)));
 
+    [Fact]
+    public void CanRefreshAddress_is_not_offered_for_a_stream_which_reads_its_playlist_afresh_anyway()
+    {
+        var stream = With(DownloadStatus.Paused);
+        stream.Stream = new StreamSource { Format = StreamFormat.Hls, MainPlaylistUrl = "https://x.example.com/v.m3u8" };
+
+        Assert.False(DownloadActions.CanRefreshAddress(stream));
+    }
+
     [Theory]
     [InlineData(DownloadStatus.Connecting, true)]
     [InlineData(DownloadStatus.Downloading, true)]

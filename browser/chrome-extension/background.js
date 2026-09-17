@@ -181,6 +181,10 @@ if (qbApi.downloads.onDeterminingFilename) {
 // ----------------------------------------------------------- content hook --
 
 qbApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (typeof message?.type === "string" && message.type.includes("stream")) {
+    return handleStreamMessage(message, sender, sendResponse) ?? false;
+  }
+
   if (message?.type === "qb-capture") {
     sendToQuickByte({
       url: message.url,
@@ -211,6 +215,118 @@ qbApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   return false;
 });
+
+// ---------------------------------------------------------------- streams --
+//
+// The playlists each tab's video players have loaded, as content.js reports them.
+// Kept in storage.session — memory only, never written to disk, gone with the
+// browser — because a service worker is stopped whenever it is idle and would
+// forget a plain variable. Nothing here leaves the browser until the user picks a
+// video in the popup.
+
+const streamKey = (tabId) => `streams:${tabId}`;
+
+/** Only the part of a tab's address that names the page: a new #fragment is not a new page. */
+function pageOf(url) {
+  return String(url || "").split("#")[0];
+}
+
+async function streamsFor(tabId) {
+  const key = streamKey(tabId);
+  const stored = await qbApi.storage.session.get(key);
+  return stored[key] || { page: "", urls: [] };
+}
+
+async function showStreamCount(tabId, count) {
+  try {
+    await qbApi.action.setBadgeBackgroundColor({ tabId, color: "#0072C6" });
+    await qbApi.action.setBadgeText({ tabId, text: count > 0 ? String(count) : "" });
+  } catch {
+    // The tab closed in the meantime.
+  }
+}
+
+async function rememberStreams(tab, urls) {
+  const record = await streamsFor(tab.id);
+  const page = pageOf(tab.url);
+
+  // Another page in the same tab starts a list of its own.
+  let list = record.page === page ? record.urls : [];
+  for (const url of urls) list = qbRememberStream(list, url);
+
+  await qbApi.storage.session.set({ [streamKey(tab.id)]: { page, urls: list } });
+  await showStreamCount(tab.id, list.length);
+}
+
+async function forgetStreams(tabId) {
+  try {
+    await qbApi.storage.session.remove(streamKey(tabId));
+  } catch {
+    // Nothing was stored.
+  }
+  await showStreamCount(tabId, 0);
+}
+
+// Every frame of a page reports on its own, often at once; one write at a time,
+// or two frames reading the same list would each drop the other's playlist.
+let streamWrites = Promise.resolve();
+
+function queueStreamWrite(work) {
+  streamWrites = streamWrites.then(work).catch((error) => console.warn("QuickByte stream list:", error));
+  return streamWrites;
+}
+
+qbApi.tabs.onRemoved.addListener((tabId) => {
+  queueStreamWrite(() => forgetStreams(tabId));
+});
+
+qbApi.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (!changeInfo.url) return;
+  queueStreamWrite(async () => {
+    const record = await streamsFor(tabId);
+    if (record.page && record.page !== pageOf(changeInfo.url)) await forgetStreams(tabId);
+  });
+});
+
+function handleStreamMessage(message, sender, sendResponse) {
+  if (message.type === "qb-streams") {
+    const urls = (Array.isArray(message.urls) ? message.urls : []).filter(qbIsStreamManifest);
+    if (sender.tab?.id !== undefined && urls.length > 0) queueStreamWrite(() => rememberStreams(sender.tab, urls));
+    return false;
+  }
+
+  if (message.type === "qb-list-streams") {
+    queueStreamWrite(async () => {
+      const record = await streamsFor(message.tabId);
+      sendResponse({ urls: record.page === pageOf(message.page) ? record.urls : [] });
+    });
+    return true;
+  }
+
+  if (message.type === "qb-send-stream") {
+    // Held to the same rule as a report: the popup only ever lists playlists.
+    if (!qbIsStreamManifest(message.url)) {
+      sendResponse({ ok: false, error: "not a video playlist" });
+      return false;
+    }
+
+    sendToQuickByte({
+      url: message.url,
+      fileName: qbStreamFileName(message.title, message.url),
+      fileSize: 0,
+      mimeType: "",
+      referrer: message.page || ""
+    })
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => {
+        reportFailure(error);
+        sendResponse({ ok: false, error: String(error.message || error) });
+      });
+    return true;
+  }
+
+  return undefined;
+}
 
 // ------------------------------------------------------------ context menu --
 

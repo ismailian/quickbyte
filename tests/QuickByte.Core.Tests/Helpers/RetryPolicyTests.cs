@@ -104,6 +104,19 @@ public sealed class RetryPolicyTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_does_not_retry_a_stream_that_cannot_be_downloaded()
+    {
+        // A live or DRM-protected stream is exactly as live on the fourth attempt.
+        int calls = 0;
+
+        await Assert.ThrowsAsync<StreamNotSupportedException>(() => RetryPolicy.ExecuteAsync<int>(
+            (_, _) => { calls++; throw new StreamNotSupportedException("live"); },
+            maxRetries: 5, NoDelay, onRetry: null, CancellationToken.None));
+
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_does_not_retry_a_cancellation()
     {
         int calls = 0;

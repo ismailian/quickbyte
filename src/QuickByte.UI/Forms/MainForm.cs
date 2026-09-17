@@ -40,6 +40,7 @@ public sealed class MainForm : Form
     private readonly ISettingsService _settingsService;
     private readonly IUpdateService _updateService;
     private readonly IRemoteFileInfoProvider _fileInfoProvider;
+    private readonly IStreamResolver _streamResolver;
     private readonly IBrowserIntegrationService _browserIntegration;
 
     private readonly Dictionary<Guid, ListViewItem> _rowsById = new();
@@ -180,9 +181,11 @@ public sealed class MainForm : Form
         ISettingsService settingsService,
         IUpdateService updateService,
         IRemoteFileInfoProvider fileInfoProvider,
+        IStreamResolver streamResolver,
         IBrowserIntegrationService browserIntegration,
         bool startMinimized = false)
     {
+        _streamResolver = streamResolver;
         _downloadManager = downloadManager;
         _queueManager = queueManager;
         _settingsService = settingsService;
@@ -1265,6 +1268,8 @@ public sealed class MainForm : Form
                 _ => when
             };
         }
+        if (item.Stream is { } stream)
+            return string.IsNullOrEmpty(stream.Quality) ? "Streaming video" : $"Streaming video · {stream.Quality}";
         return string.IsNullOrEmpty(item.ContentType) ? "—" : item.ContentType;
     }
 
@@ -1567,7 +1572,7 @@ public sealed class MainForm : Form
     /// </summary>
     private void OnAddDownloadClicked(string? initialUrl = null, CapturedDownload? captured = null)
     {
-        var dialog = new NewDownloadForm(_settingsService, _fileInfoProvider, initialUrl, captured, _queueManager.Queues);
+        var dialog = new NewDownloadForm(_settingsService, _fileInfoProvider, initialUrl, captured, _queueManager.Queues, _streamResolver);
         dialog.FormClosed += (_, _) =>
         {
             // Result is only ever set on the OK path, so its presence *is* the

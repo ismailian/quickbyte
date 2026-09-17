@@ -25,7 +25,10 @@ src/
     Helpers/                ByteFormatter, RangeSplitter, SpeedCalculator, RetryPolicy,
                               FileNameHelper, BandwidthLimiter, ProductVersion,
                               SecretProtector, UrlCredentials
-    Exceptions/             AuthenticationRequiredException
+    Streaming/              HLS playlist and DASH manifest parsers, StreamPlan (which
+                              pieces to fetch, and which streams to refuse),
+                              StreamResolver (the qualities a playlist offers)
+    Exceptions/             AuthenticationRequiredException, StreamNotSupportedException
 
   QuickByte.UI/            WinForms application
     Program.cs             Composition root (wires Core services together)
@@ -631,6 +634,62 @@ change goes through `IDownloadManager.ChangeAddress`, which refuses a download
 that is running, clears the stale error, and is announced as a status event so
 the details window shows the new address.
 
+## Streaming video (HLS and DASH)
+
+A video player never downloads "the video". It reads a playlist — HLS's `.m3u8`
+or DASH's `.mpd` — picks a quality, and fetches that quality's pieces one after
+another, often with the sound in a playlist of its own. Handing that playlist to
+a download manager used to save a text file of addresses.
+
+**Adding one.** When the address Add Download fetches is a playlist
+(`StreamDetector`: by content type, or by extension when the server says
+`text/plain`), `StreamResolver` reads it and the window grows a **Quality** row:
+every quality it offers, best first, labelled `1080p · 5.2 Mbps` (and by codec
+when the same picture comes with different sound), plus the sound on its own.
+The file name follows the choice's container — `.ts` for MPEG-TS, `.mp4` for
+fragmented MP4, `.m4a`/`.aac` for sound — and a playlist named `master.m3u8` gives
+way to the folder it sits in, or to the page's title when the browser sent it.
+
+**Downloading one.** A download whose `DownloadItem.Stream` is set is run by
+`StreamDownloadService` instead of `DownloadService`, behind the same interface,
+statuses and events:
+
+- **The playlist is read again on every run.** Piece addresses are usually
+  signed and expire; the playlist hands out current ones.
+- **Pieces are fetched in parallel**, up to the download's connection count, each
+  retried like a connection and throttled by the same speed limits. A piece that
+  fails for good stops new pieces from starting; the ones under way finish, and
+  a Retry fetches only what is missing.
+- **Resume is by piece.** A finished piece is renamed from `.part` into place; a
+  `.part` carries on with a `Range` request. `stream.json` records the playlist's
+  shape — a playlist whose piece count changed is a different cut of the video,
+  and its old pieces are thrown away — and whether every piece is down, so an
+  interrupted merge finishes without a playlist that may have expired.
+- **AES-128 is decrypted as each piece is written**, with the key fetched once per
+  address (with the page's cookies) and held only in memory. An encrypted piece
+  never resumes part way: CBC cannot continue from plaintext.
+- **The size is estimated** from the pieces already down until the last one lands.
+- **Joining uses the same resumable merger** as ordinary downloads, one output per
+  track, then the Mark of the Web and the checksum, as for any file.
+
+**What is refused**, in the Add window before anything is added, and again by the
+engine: live streams (no `#EXT-X-ENDLIST`, or `type="dynamic"`), which have no end
+to download to, and DRM — SAMPLE-AES, FairPlay's `skd://` keys, any
+`ContentProtection` — whose pieces cannot be played without a licence. A playlist
+pointing a piece or key anywhere but http(s) is refused too; a DASH manifest is
+parsed with DTDs prohibited.
+
+**There is no muxer**, so a quality whose sound is separate is saved as two files
+side by side — `Talk.mp4` and `Talk.audio.m4a` — both named under the add lock so
+neither can replace a file or be claimed by another download, and both removed
+with the download when asked. Players (VLC, mpv) open the pair; `ffmpeg -i Talk.mp4
+-i Talk.audio.m4a -c copy out.mp4` joins them losslessly.
+
+**From the browser**, the extension notices the playlists a page's player loads
+(from the page's resource timeline — no new permission) and counts them on its
+toolbar badge; its popup lists them under *Videos on this page* with a
+**Download** button that opens Add Download on the playlist, named after the page.
+
 ## Credentials
 
 **HTTP Basic** is sent pre-emptively rather than after a `401`: every
@@ -696,6 +755,9 @@ Chrome *external extension* registry entry pointing at the Web Store, so Chrome
 raises its own "New extension added" prompt at the next launch — the same
 mechanism Adobe and IDM use. No app can install a Chrome extension silently
 without enterprise policy, and QuickByte deliberately doesn't try.
+
+The extension also lists the video playlists a page's player has loaded, in its
+toolbar popup, and sends one on request — see Streaming video.
 
 See `browser/chrome-extension/README.md` for pairing and
 `browser/chrome-extension/STORE.md` for publishing.
@@ -790,6 +852,8 @@ Every window is styled after classic IDM, on a single flat palette defined in
 - **Download complete window** — replaces the details window when a transfer
   finishes: final size, average speed, destination folder, and Open File /
   Open Folder actions. Opting out of it from the checkbox is persisted.
+- **Add New Download** shows a **Quality** row when the address is a streaming
+  video's playlist — see Streaming video.
 - **Add New Download** pre-fills from the clipboard and resolves file
   info (type, size, resumability) before you commit. Its **Save to** box shows a
   folder inside your profile as `~\Downloads\QuickByte` — the full path is wider
@@ -895,6 +959,8 @@ IDM clone. A few things a production build would add:
 - A signed installer.
 - Waking a sleeping machine for a scheduled queue — see Queues and scheduling.
 - HTTP authentication schemes beyond Basic (Digest, NTLM, negotiate).
+- Muxing a stream's separate sound back into its video, DRM-protected and live
+  streams, and DASH manifests with more than one period (only the first is read).
 - A packed, store-published browser extension — the one in `browser/` is
   loaded unpacked, and only Chrome's hooks are wired.
 - Automated tests (the interface-driven design makes the Core layer easy

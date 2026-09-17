@@ -52,6 +52,7 @@ public static class RetryPolicy
             and not AuthenticationRequiredException
             and not RemoteFileChangedException
             and not InsufficientDiskSpaceException
+            and not StreamNotSupportedException
         && !IsDiskFull(exception);
 
     // ERROR_DISK_FULL and ERROR_HANDLE_DISK_FULL as HRESULTs. Space does not come

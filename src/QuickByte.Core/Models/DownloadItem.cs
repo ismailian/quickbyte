@@ -99,6 +99,17 @@ public sealed class DownloadItem
     public DateTimeOffset? CompletedAt { get; set; }
 
     public string FullPath => Path.Combine(SaveFolder, FileName);
+
+    /// <summary>
+    /// Set when this download is a streaming video — <see cref="Url"/> is then its
+    /// playlist or manifest, and <see cref="Services.StreamDownloadService"/> runs it.
+    /// Null for every ordinary file.
+    /// </summary>
+    public StreamSource? Stream { get; set; }
+
+    /// <summary>Where a stream's separate sound is saved, beside <see cref="FullPath"/>; null when there is none.</summary>
+    public string? AudioFullPath =>
+        Stream?.AudioFileName is { Length: > 0 } name ? Path.Combine(SaveFolder, name) : null;
     public string TempFolderPath { get; set; } = string.Empty;
 
     /// <summary>
