@@ -245,21 +245,34 @@ public sealed class RemoteFileInfoProviderTests
         Assert.Equal(new[] { "HEAD", "GET" }, stub.Requests.Select(r => r.Method));
     }
 
-    [Theory]
-    [InlineData(HttpStatusCode.Unauthorized)]
-    [InlineData(HttpStatusCode.ProxyAuthenticationRequired)]
-    public async Task A_challenge_the_probe_repeats_is_still_a_credentials_prompt(HttpStatusCode challenge)
+    [Fact]
+    public async Task A_challenge_the_probe_repeats_is_still_a_credentials_prompt()
     {
         // The other half: a server that really wants a login refuses the GET
         // too, and the prompt has to survive the HEAD no longer deciding it.
         using var stub = new StubServer(
-            _ => new HttpResponseMessage(challenge),
-            _ => new HttpResponseMessage(challenge));
+            _ => new HttpResponseMessage(HttpStatusCode.Unauthorized),
+            _ => new HttpResponseMessage(HttpStatusCode.Unauthorized));
 
         var thrown = await Assert.ThrowsAsync<AuthenticationRequiredException>(
             () => new RemoteFileInfoProvider(stub.Client).GetFileInfoAsync(Url));
 
         Assert.False(thrown.CredentialsWereSupplied);
+    }
+
+    [Fact]
+    public async Task A_proxy_that_wants_a_login_is_never_answered_with_the_sites_sign_in_prompt()
+    {
+        // A 407 is the proxy's challenge. Turning it into the site's sign-in prompt
+        // would have the user type a site password that is then sent to the proxy.
+        using var stub = new StubServer(
+            _ => new HttpResponseMessage(HttpStatusCode.ProxyAuthenticationRequired),
+            _ => new HttpResponseMessage(HttpStatusCode.ProxyAuthenticationRequired));
+
+        var thrown = await Assert.ThrowsAsync<ProxyAuthenticationException>(
+            () => new RemoteFileInfoProvider(stub.Client).GetFileInfoAsync(Url));
+
+        Assert.Contains("Options > Proxy", thrown.Message);
     }
 
     // ---------------------------------------------------------- what it reads --

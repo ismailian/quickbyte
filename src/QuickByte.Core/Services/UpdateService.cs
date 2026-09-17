@@ -41,7 +41,12 @@ public sealed class UpdateService : IUpdateService
 
     private static readonly HttpClient Client = new(new SocketsHttpHandler
     {
-        PooledConnectionLifetime = TimeSpan.FromMinutes(10)
+        PooledConnectionLifetime = TimeSpan.FromMinutes(10),
+
+        // A network that only reaches the internet through a proxy is one where
+        // the update check has to go through it too.
+        Proxy = Proxy.AppProxy.Shared,
+        UseProxy = true
     })
     { Timeout = TimeSpan.FromSeconds(30) };
 

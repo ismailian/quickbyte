@@ -337,6 +337,20 @@ public sealed class DownloadConnectionTests
     }
 
     [Fact]
+    public async Task A_proxy_challenge_points_at_the_proxy_settings_and_is_not_retried()
+    {
+        using var folder = new TempFolder();
+        using var stub = new StubServer(_ => new HttpResponseMessage(HttpStatusCode.ProxyAuthenticationRequired));
+
+        var connection = Connection(stub, folder.File("part0.tmp"), 0, 99, settings: Settings(maxRetries: 3));
+        var thrown = await Assert.ThrowsAsync<ProxyAuthenticationException>(
+            () => connection.RunAsync(CancellationToken.None));
+
+        Assert.Equal(ProxyAuthenticationException.NeededMessage, thrown.Message);
+        Assert.Single(stub.Ranges);
+    }
+
+    [Fact]
     public async Task A_rejected_password_says_so()
     {
         using var folder = new TempFolder();

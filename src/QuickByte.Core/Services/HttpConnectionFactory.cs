@@ -2,6 +2,7 @@ using System.Threading;
 using System.Net.Http;
 using QuickByte.Core.Interfaces;
 using QuickByte.Core.Models;
+using QuickByte.Core.Services.Proxy;
 
 namespace QuickByte.Core.Services;
 
@@ -21,6 +22,11 @@ public sealed class HttpConnectionFactory : IConnectionFactory
         {
             MaxConnectionsPerServer = DownloadSettings.MaxConnections + 4,
             PooledConnectionLifetime = TimeSpan.FromMinutes(10),
+
+            // Asked for every request, so a proxy changed in Options applies to
+            // the next one without a restart. See AppProxy.
+            Proxy = AppProxy.Shared,
+            UseProxy = true,
 
             // The browser extension hands us the page's own Cookie header, and a
             // container that also injects its own would leave two Cookie sources

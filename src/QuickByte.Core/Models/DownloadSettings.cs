@@ -66,6 +66,19 @@ public sealed class DownloadSettings
     public bool SortIntoCategoryFolders { get; set; }
 
     /// <summary>
+    /// How downloads reach the internet. Applied live — see
+    /// <see cref="Services.Proxy.AppProxy"/> — and coalesced, because an explicit
+    /// null in a hand-edited file must not leave the engine without a mode.
+    /// </summary>
+    public ProxySettings Proxy
+    {
+        get => _proxy;
+        set => _proxy = value ?? new ProxySettings();
+    }
+
+    private ProxySettings _proxy = new();
+
+    /// <summary>
     /// A folder chosen for a category, overriding the subfolder of
     /// <see cref="DefaultDownloadFolder"/> it would otherwise get. Only read while
     /// <see cref="SortIntoCategoryFolders"/> is on. Coalesced for the same reason

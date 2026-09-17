@@ -55,6 +55,13 @@ public sealed class SettingsForm : Form
     private TextBox _clipboardTypesTextBox = null!;
     private CheckBox _startWithWindowsCheckBox = null!;
     private CheckBox _startMinimizedCheckBox = null!;
+    private ComboBox _proxyModeBox = null!;
+    private ComboBox _proxyKindBox = null!;
+    private TextBox _proxyHostTextBox = null!;
+    private NumericUpDown _proxyPortUpDown = null!;
+    private TextBox _proxyUserTextBox = null!;
+    private TextBox _proxyPasswordTextBox = null!;
+    private TextBox _proxyBypassTextBox = null!;
     private CheckBox _browserIntegrationCheckBox = null!;
     private NumericUpDown _browserPortUpDown = null!;
     private TextBox _browserTokenTextBox = null!;
@@ -92,6 +99,7 @@ public sealed class SettingsForm : Form
         BuildFoldersTab(tabs.AddPage("Folders"));
         BuildInterfaceTab(tabs.AddPage("Interface"));
         BuildStartupTab(tabs.AddPage("Startup"));
+        BuildProxyTab(tabs.AddPage("Proxy"));
         BuildBrowserTab(tabs.AddPage("Browser"));
 
         Controls.Add(tabs);
@@ -299,6 +307,107 @@ public sealed class SettingsForm : Form
         AddNoteRow(layout, row++,
             "Applies to every launch, not only the one Windows performs at sign-in. "
             + "Downloads still resume; double-click the tray icon to open the window.");
+    }
+
+    /// <summary>
+    /// How downloads reach the internet: as Windows is set (the default, and what
+    /// QuickByte always did), directly, or through a proxy named here. Applied to
+    /// the next request the moment Options is saved — see
+    /// <see cref="Core.Services.Proxy.AppProxy"/>.
+    /// </summary>
+    private void BuildProxyTab(Panel page)
+    {
+        var layout = NewGrid(page, rows: 6);
+        int row = 0;
+
+        var modeCaption = CaptionBlock("Connect", "Route to the internet.");
+        layout.Controls.Add(modeCaption, 0, row);
+        _proxyModeBox = NewDropDown();
+        _proxyModeBox.Items.AddRange(new object[] { ProxyMode.System, ProxyMode.None, ProxyMode.Manual });
+        _proxyModeBox.Format += (_, e) => e.Value = e.ListItem switch
+        {
+            ProxyMode.None => "Directly, without a proxy",
+            ProxyMode.Manual => "Through this proxy",
+            _ => "Using Windows' proxy settings"
+        };
+        _proxyModeBox.Dock = DockStyle.Fill;
+        _proxyModeBox.Margin = new Padding(0, 13, 0, 0);
+        layout.Controls.Add(_proxyModeBox, 1, row);
+        layout.SetColumnSpan(_proxyModeBox, 2);
+        row++;
+
+        layout.Controls.Add(CaptionBlock("Server", "Type, host and port."), 0, row);
+        var server = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = Theme.Surface, Margin = new Padding(0) };
+        server.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92));
+        server.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        _proxyKindBox = NewDropDown();
+        _proxyKindBox.Items.AddRange(new object[] { ProxyKind.Http, ProxyKind.Socks5, ProxyKind.Socks4 });
+        _proxyKindBox.Format += (_, e) => e.Value = e.ListItem switch
+        {
+            ProxyKind.Socks5 => "SOCKS5",
+            ProxyKind.Socks4 => "SOCKS4",
+            _ => "HTTP"
+        };
+        _proxyKindBox.Dock = DockStyle.Fill;
+        _proxyKindBox.Margin = new Padding(0, 13, 8, 0);
+        _proxyHostTextBox = FormChrome.Field();
+        _proxyHostTextBox.Margin = new Padding(0, 12, 8, 0);
+        _proxyHostTextBox.PlaceholderText = "proxy.example.com";
+        server.Controls.Add(_proxyKindBox, 0, 0);
+        server.Controls.Add(_proxyHostTextBox, 1, 0);
+        layout.Controls.Add(server, 1, row);
+        _proxyPortUpDown = new NumericUpDown
+        {
+            Minimum = 1,
+            Maximum = 65535,
+            Width = 88,
+            BorderStyle = BorderStyle.FixedSingle,
+            Font = Theme.Ui,
+            Anchor = AnchorStyles.Top | AnchorStyles.Right,
+            Margin = new Padding(0, 12, 0, 0),
+            TextAlign = HorizontalAlignment.Right
+        };
+        layout.Controls.Add(_proxyPortUpDown, 2, row);
+        row++;
+
+        _proxyUserTextBox = AddTextRow(layout, row++, "User name", "If the proxy asks for one.");
+        _proxyPasswordTextBox = AddTextRow(layout, row++, "Password", "Stored encrypted.");
+        _proxyPasswordTextBox.UseSystemPasswordChar = true;
+        _proxyBypassTextBox = AddTextRow(layout, row++, "Not for", "Hosts it skips, e.g. *.lan");
+
+        AddNoteRow(layout, row,
+            "A proxy sees every download's address, and HTTP and SOCKS send its password unencrypted. "
+            + "FTP uses only a proxy set here, never Windows' settings.");
+
+        _proxyModeBox.SelectedIndexChanged += (_, _) => UpdateProxyFields();
+    }
+
+    private static ComboBox NewDropDown() => new()
+    {
+        DropDownStyle = ComboBoxStyle.DropDownList,
+        FlatStyle = FlatStyle.Flat,
+        BackColor = Theme.Surface,
+        ForeColor = Theme.Text,
+        Font = Theme.Ui,
+        FormattingEnabled = true
+    };
+
+    private static TextBox AddTextRow(TableLayoutPanel layout, int row, string caption, string hint)
+    {
+        layout.Controls.Add(CaptionBlock(caption, hint), 0, row);
+        var field = FormChrome.Field();
+        field.Margin = new Padding(0, 12, 0, 0);
+        layout.Controls.Add(field, 1, row);
+        layout.SetColumnSpan(field, 2);
+        return field;
+    }
+
+    /// <summary>The server fields mean something only for a proxy named here.</summary>
+    private void UpdateProxyFields()
+    {
+        bool manual = _proxyModeBox.SelectedItem is ProxyMode.Manual;
+        foreach (Control field in new Control[] { _proxyKindBox, _proxyHostTextBox, _proxyPortUpDown, _proxyUserTextBox, _proxyPasswordTextBox, _proxyBypassTextBox })
+            field.Enabled = manual;
     }
 
     /// <summary>
@@ -605,6 +714,15 @@ public sealed class SettingsForm : Form
         _startWithWindowsCheckBox.Checked = StartupRegistration.IsEnabled || s.StartWithWindows;
         _startMinimizedCheckBox.Checked = s.StartMinimized;
 
+        _proxyModeBox.SelectedItem = Enum.IsDefined(s.Proxy.Mode) ? s.Proxy.Mode : ProxyMode.System;
+        _proxyKindBox.SelectedItem = Enum.IsDefined(s.Proxy.Kind) ? s.Proxy.Kind : ProxyKind.Http;
+        _proxyHostTextBox.Text = s.Proxy.Host;
+        _proxyPortUpDown.Value = Math.Clamp(s.Proxy.Port, 1, 65535);
+        _proxyUserTextBox.Text = s.Proxy.UserName;
+        _proxyPasswordTextBox.Text = s.Proxy.Password;
+        _proxyBypassTextBox.Text = s.Proxy.Bypass;
+        UpdateProxyFields();
+
         _browserIntegrationCheckBox.Checked = s.BrowserIntegrationEnabled;
         _browserPortUpDown.Value = Math.Clamp(s.BrowserIntegrationPort, 1024, 65535);
 
@@ -676,8 +794,27 @@ public sealed class SettingsForm : Form
             // field only mirrors it.
             BrowserIntegrationToken = _settingsService.Current.BrowserIntegrationToken,
             // No UI field — carried forward explicitly so it doesn't reset.
-            StreamBufferSizeBytes = _settingsService.Current.StreamBufferSizeBytes
+            StreamBufferSizeBytes = _settingsService.Current.StreamBufferSizeBytes,
+            Proxy = new ProxySettings
+            {
+                Mode = _proxyModeBox.SelectedItem is ProxyMode mode ? mode : ProxyMode.System,
+                Kind = _proxyKindBox.SelectedItem is ProxyKind kind ? kind : ProxyKind.Http,
+                Host = _proxyHostTextBox.Text.Trim(),
+                Port = (int)_proxyPortUpDown.Value,
+                UserName = _proxyUserTextBox.Text.Trim(),
+                Password = _proxyPasswordTextBox.Text,
+                Bypass = _proxyBypassTextBox.Text.Trim()
+            }
         };
+
+        // Kept, not cleared, when another mode is chosen: switching back to the
+        // proxy should not mean typing it in again.
+        if (updated.Proxy.Mode == ProxyMode.Manual && !updated.Proxy.IsComplete)
+        {
+            MessageBox.Show(this, "Enter the proxy's host name or address and its port, or choose another way to connect.",
+                "Options", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
 
         var notAPath = updated.CategoryFolders.FirstOrDefault(pair => !Path.IsPathFullyQualified(pair.Value));
         if (notAPath.Value is not null)

@@ -278,7 +278,10 @@ public sealed class DownloadConnection : IResizableConnection
         {
             // Separated from the generic failure below so RetryPolicy stops rather
             // than spending its attempts re-presenting the same rejected password.
-            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.ProxyAuthenticationRequired)
+            if (response.StatusCode == HttpStatusCode.ProxyAuthenticationRequired)
+                throw new ProxyAuthenticationException(ProxyAuthenticationException.NeededMessage);
+
+            if (response.StatusCode == HttpStatusCode.Unauthorized)
             {
                 throw new AuthenticationRequiredException(
                     _options?.HasCredentials == true

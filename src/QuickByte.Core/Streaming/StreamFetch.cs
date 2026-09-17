@@ -49,7 +49,10 @@ internal static class StreamFetch
     /// </summary>
     public static void EnsureSuccess(HttpResponseMessage response, RequestOptions? options)
     {
-        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.ProxyAuthenticationRequired)
+        if (response.StatusCode == HttpStatusCode.ProxyAuthenticationRequired)
+            throw new ProxyAuthenticationException(ProxyAuthenticationException.NeededMessage);
+
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
         {
             throw new AuthenticationRequiredException(
                 options?.HasCredentials == true

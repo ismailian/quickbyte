@@ -783,6 +783,7 @@ directly to `DownloadSettings`:
 | Browser integration | on |
 | Browser bridge port | 1024–65535, default 9614 |
 | Browser pairing token | generated on first use |
+| Proxy | Windows' settings (default), none, or HTTP / SOCKS5 / SOCKS4 with login and bypass list |
 
 A queue's own settings — downloads at once, queue speed limit, and its
 schedule — are per queue rather than global, and live in the Queues & Scheduler
@@ -801,9 +802,38 @@ Where *finished* files land is unaffected and is still yours to choose — the
 **Folders** tab sets the default, and Add Download's **Save to** box overrides
 it for a single file.
 
-Two of these are honoured **live** rather than at the next download: the
-global speed limit, and browser integration (enabling it, or moving its port,
-takes effect on Save). Everything else is snapshotted — see `CLAUDE.md`.
+Three of these are honoured **live** rather than at the next download: the
+global speed limit, browser integration (enabling it, or moving its port, takes
+effect on Save), and the proxy. Everything else is snapshotted — see `CLAUDE.md`.
+
+### Proxy
+
+The **Proxy** tab chooses how downloads reach the internet: **using Windows'
+proxy settings** (the default, and what every earlier version did), **directly**,
+or **through a proxy named here** — HTTP, SOCKS5 or SOCKS4, with an optional user
+name and password (stored DPAPI-encrypted, like download passwords) and a list of
+hosts to reach directly (`example.com; *.lan; .corp.example.com; <local>`, the
+forms Windows takes). This machine is never reached through a proxy.
+
+- **Every HTTP client uses it** — downloads, probes, streaming playlists and the
+  update check — through one `AppProxy`, which the handlers ask on every request.
+  That is what makes a change apply to the next request without a restart; the
+  login is looked up at the moment a proxy asks for it, for the same reason.
+- **Host names go to a SOCKS proxy to resolve** (SOCKS5 domain addressing, SOCKS4a),
+  so DNS lookups do not leak around it.
+- **FTP goes through a proxy set here**, control and passive data connections
+  alike (`ProxyTunnel`: SOCKS5, SOCKS4a or HTTP `CONNECT`). Windows' own proxy
+  settings describe the web, so with them FTP connects directly — and most HTTP
+  proxies refuse `CONNECT` to port 21 anyway; SOCKS is the one to use for FTP.
+- **A `407` is the proxy's**, and reported as such — "Enter them in Options >
+  Proxy" — rather than raising the site's sign-in prompt, which would have the
+  user type a site password that then went to the proxy. It is not retried.
+- With Windows' settings, a proxy that challenges with NTLM or Negotiate gets the
+  signed-in user's credentials, as a browser gives them. A proxy named here gets
+  only the login typed for it.
+
+A proxy sees the address of every download, and HTTP and SOCKS proxies receive
+their password unencrypted; the tab says so.
 
 The two startup settings are on the **Startup** tab. "Start with Windows"
 writes a value under `HKCU\...\CurrentVersion\Run` — per-user, no elevation,

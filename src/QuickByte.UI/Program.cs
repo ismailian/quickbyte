@@ -2,6 +2,7 @@ using System.Threading;
 using System.Windows.Forms;
 using QuickByte.Core.Interfaces;
 using QuickByte.Core.Services;
+using QuickByte.Core.Services.Proxy;
 using QuickByte.Core.Streaming;
 using QuickByte.UI.Controls;
 using QuickByte.UI.Forms;
@@ -45,6 +46,12 @@ internal static class Program
             // path, so "start with Windows" survives an update or a move. Silent
             // and best-effort: nobody asked for it on this launch.
             StartupRegistration.Sync(settingsService.Current.StartWithWindows);
+
+            // Every HTTP client in the engine asks this for its proxy on each request,
+            // so it is kept in step with Options live — a proxy that needs a restart
+            // to apply is one the user will assume is broken. See AppProxy.
+            AppProxy.Shared.Configure(settingsService.Current.Proxy);
+            settingsService.SettingsChanged += (_, settings) => AppProxy.Shared.Configure(settings.Proxy);
 
             var repository = new DownloadRepository();
             var queueRepository = new QueueRepository();

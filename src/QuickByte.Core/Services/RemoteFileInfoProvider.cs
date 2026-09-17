@@ -5,6 +5,7 @@ using QuickByte.Core.Exceptions;
 using QuickByte.Core.Helpers;
 using QuickByte.Core.Interfaces;
 using QuickByte.Core.Models;
+using QuickByte.Core.Services.Proxy;
 
 namespace QuickByte.Core.Services;
 
@@ -47,6 +48,11 @@ public sealed class RemoteFileInfoProvider : IRemoteFileInfoProvider
     private static readonly HttpClient SharedClient = new(new SocketsHttpHandler
     {
         PooledConnectionLifetime = TimeSpan.FromMinutes(10),
+
+        // The probe goes the way the connections will, or it describes a file
+        // they then cannot reach.
+        Proxy = AppProxy.Shared,
+        UseProxy = true,
 
         // Same reason as HttpConnectionFactory: captured browser cookies arrive
         // as an explicit header and must be the only ones on the request.
@@ -197,7 +203,12 @@ public sealed class RemoteFileInfoProvider : IRemoteFileInfoProvider
 
     private static void ThrowIfChallenged(HttpResponseMessage response, RemoteFileInfo info, RequestOptions? options)
     {
-        if (response.StatusCode is not (HttpStatusCode.Unauthorized or HttpStatusCode.ProxyAuthenticationRequired))
+        // The proxy's own challenge is not the file's: answering it with a sign-in
+        // prompt would send the user's site password to the proxy.
+        if (response.StatusCode == HttpStatusCode.ProxyAuthenticationRequired)
+            throw new ProxyAuthenticationException(ProxyAuthenticationException.NeededMessage);
+
+        if (response.StatusCode != HttpStatusCode.Unauthorized)
             return;
 
         bool supplied = options?.HasCredentials == true;

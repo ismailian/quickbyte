@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using QuickByte.Core.Exceptions;
 using QuickByte.Core.Models;
+using QuickByte.Core.Services.Proxy;
 
 namespace QuickByte.Core.Services.Ftp;
 
@@ -41,6 +42,9 @@ internal sealed class FtpControlChannel : IAsyncDisposable
     private readonly TcpClient _control;
     private readonly string _host;
     private readonly bool _secure;
+
+    /// <summary>The proxy the control connection went through; every data connection goes the same way.</summary>
+    private readonly ProxyEndpoint? _proxy;
     private readonly Encoding _encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 
     private Stream _stream;
@@ -49,8 +53,9 @@ internal sealed class FtpControlChannel : IAsyncDisposable
     private Stream? _dataStream;
     private bool _protectData;
 
-    private FtpControlChannel(TcpClient control, Stream stream, string host, bool secure)
+    private FtpControlChannel(TcpClient control, Stream stream, string host, bool secure, ProxyEndpoint? proxy)
     {
+        _proxy = proxy;
         _control = control;
         _stream = stream;
         _host = host;
@@ -59,34 +64,38 @@ internal sealed class FtpControlChannel : IAsyncDisposable
     }
 
     /// <summary>
-    /// Opens the control connection, negotiates TLS for an <c>ftps://</c> URL,
-    /// logs in (anonymously when <paramref name="credentials"/> is null or
-    /// empty) and switches to binary mode.
+    /// Opens the control connection — through the proxy Options names, if any —
+    /// negotiates TLS for an <c>ftps://</c> URL, logs in (anonymously when
+    /// <paramref name="credentials"/> is null or empty) and switches to binary mode.
     /// </summary>
-    public static async Task<FtpControlChannel> ConnectAsync(Uri uri, DownloadCredentials? credentials, CancellationToken cancellationToken)
+    /// <param name="proxy">Where the proxy decision comes from; <see cref="AppProxy.Shared"/> unless a test says otherwise.</param>
+    public static async Task<FtpControlChannel> ConnectAsync(
+        Uri uri, DownloadCredentials? credentials, CancellationToken cancellationToken, AppProxy? proxy = null)
     {
         bool secure = uri.Scheme.Equals("ftps", StringComparison.OrdinalIgnoreCase);
         int port = uri.IsDefaultPort || uri.Port <= 0 ? DefaultPort : uri.Port;
+        var tunnel = (proxy ?? AppProxy.Shared).TunnelFor(uri);
 
-        var client = new TcpClient();
         FtpControlChannel? channel = null;
+        TcpClient? client = null;
         try
         {
             // TcpClient has no connect timeout of its own; a linked token gives
             // one without leaving a half-open socket behind on an unreachable
-            // host, which is the usual way an FTP URL fails.
+            // host, which is the usual way an FTP URL fails. It covers the
+            // proxy's handshake too.
             using var connectTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             connectTimeout.CancelAfter(ConnectTimeoutMilliseconds);
-            await client.ConnectAsync(uri.Host, port, connectTimeout.Token).ConfigureAwait(false);
+            (client, var stream) = await ProxyTunnel.ConnectAsync(uri.Host, port, tunnel, connectTimeout.Token).ConfigureAwait(false);
 
-            channel = new FtpControlChannel(client, client.GetStream(), uri.Host, secure);
+            channel = new FtpControlChannel(client, stream, uri.Host, secure, tunnel);
             await channel.HandshakeAsync(credentials, cancellationToken).ConfigureAwait(false);
             return channel;
         }
         catch
         {
             if (channel is not null) await channel.DisposeAsync().ConfigureAwait(false);
-            else client.Dispose();
+            else client?.Dispose();
             throw;
         }
     }
@@ -237,13 +246,11 @@ internal sealed class FtpControlChannel : IAsyncDisposable
     {
         (string host, int port) = await EnterPassiveModeAsync(cancellationToken).ConfigureAwait(false);
 
-        var data = new TcpClient();
         using var connectTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         connectTimeout.CancelAfter(ConnectTimeoutMilliseconds);
-        await data.ConnectAsync(host, port, connectTimeout.Token).ConfigureAwait(false);
+        var (data, stream) = await ProxyTunnel.ConnectAsync(host, port, _proxy, connectTimeout.Token).ConfigureAwait(false);
 
         _data = data;
-        Stream stream = data.GetStream();
 
         if (_secure && _protectData)
         {
