@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      A console executable, unlike the agent: this one is run from a prompt or a
+      script, and its whole output is what it prints and the code it exits with.
+      Named qb.exe rather than QuickByte.exe's lower-case twin, which Windows could
+      not tell apart from the app in the same folder.
+    -->
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>QuickByte.Cli</RootNamespace>
+    <AssemblyName>qb</AssemblyName>
+    <AssemblyTitle>QuickByte Command Line</AssemblyTitle>
+    <Description>Adds downloads to QuickByte and controls it from a prompt or a script.</Description>
+    <ApplicationIcon>..\QuickByte.UI\Assets\quickbyte.ico</ApplicationIcon>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      The grammar, the messages that cross the pipe and the output formatting all
+      live in Core, where they are tested and where the app reads the same messages.
+    -->
+    <ProjectReference Include="..\QuickByte.Core\QuickByte.Core.csproj" />
+  </ItemGroup>
+
+</Project>

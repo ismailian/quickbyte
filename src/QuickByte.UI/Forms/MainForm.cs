@@ -1608,6 +1608,25 @@ public sealed class MainForm : Form
     /// as soon as the item exists rather than when the file has finished — which
     /// is what makes it possible to put the item in the queue at all.
     /// </summary>
+    /// <summary>
+    /// How <c>qb add</c> adds a download: as Add Download would, without the details
+    /// window — a command from a prompt or a script must not open windows over
+    /// whatever the user is doing. The request never starts the download itself, so
+    /// the add completes before the flag is lowered.
+    /// </summary>
+    public async Task<DownloadItem> AddFromCommandLineAsync(DownloadRequest request)
+    {
+        _suppressDetailsWindow = true;
+        try
+        {
+            return await _downloadManager.AddDownloadAsync(request with { StartImmediately = false });
+        }
+        finally
+        {
+            _suppressDetailsWindow = false;
+        }
+    }
+
     private async Task AddToQueueAsync(DownloadRequest request, Guid queueId)
     {
         DownloadItem item;

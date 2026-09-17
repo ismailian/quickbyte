@@ -1,6 +1,7 @@
 using System.Threading;
 using System.Windows.Forms;
 using QuickByte.Core.Interfaces;
+using QuickByte.Core.Commands;
 using QuickByte.Core.Services;
 using QuickByte.Core.Services.Proxy;
 using QuickByte.Core.Streaming;
@@ -126,6 +127,14 @@ internal static class Program
                 downloadManager, queueManager, settingsService, updateService, fileInfoProvider,
                 streamResolver, browserIntegration, startMinimized);
 
+            // qb.exe's channel. Every command is carried out on the UI thread, where
+            // the windows' own actions run, and the answer goes back when it is done.
+            var commands = new CommandProcessor(
+                downloadManager, queueManager, fileInfoProvider, streamResolver, settingsService,
+                mainForm.AddFromCommandLineAsync, AppVersion.Display);
+            using var stopCommands = new CancellationTokenSource();
+            _ = CommandPipe.ServeAsync(request => OnUiThread(dispatcher, () => commands.ExecuteAsync(request)), stopCommands.Token);
+
             // The pipe listener raises this on a thread-pool thread, so it goes
             // through the same dispatcher Core's events do rather than touching
             // a control directly.
@@ -163,10 +172,35 @@ internal static class Program
 
             Application.Run(mainForm);
 
+            // No more commands once the window is gone: the managers they reach are
+            // about to be disposed.
+            stopCommands.Cancel();
+
             // Stops the schedule timer and cancels any run still in flight. The
             // downloads themselves are already paused by MainForm's close path.
             queueManager.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Runs <paramref name="work"/> on the UI thread and completes with its answer.
+    /// A command that throws is answered with the error rather than leaving qb waiting.
+    /// </summary>
+    private static Task<CommandResponse> OnUiThread(AppDispatcher dispatcher, Func<Task<CommandResponse>> work)
+    {
+        var answer = new TaskCompletionSource<CommandResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
+        dispatcher.Post(async () =>
+        {
+            try
+            {
+                answer.SetResult(await work());
+            }
+            catch (Exception ex)
+            {
+                answer.SetResult(CommandResponse.Fail(ex.Message));
+            }
+        });
+        return answer.Task;
     }
 
     /// <summary>

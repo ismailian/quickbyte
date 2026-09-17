@@ -47,6 +47,10 @@ src/
     Assets/                 quickbyte.ico — the one real image file, generated from
                               BrandIcon.cs so the shell icon matches the drawn one
 
+  QuickByte.Cli/           qb.exe — the command-line tool. Parses arguments, talks to the
+                             running app over a per-user named pipe, prints the answer.
+                             See "Command line" below.
+
   QuickByte.Agent/         Windowless scheduler that outlives the app: reads queues.json,
     Program.cs               and launches QuickByte when a queue's schedule comes due.
     SchedulerLoop.cs         Starts with the user's session; exits by itself when no
@@ -745,6 +749,47 @@ carrying the host and the server's own account of the refusal, and the fetch is
 retried with what it collects. There is no "remember me" on it: a download
 paused for three days has to present the same login when it resumes, so the
 credentials are kept either way, encrypted.
+
+## Command line
+
+`qb.exe` sits beside `QuickByte.exe` (setup can add it to `PATH`) and drives the
+running app from a prompt or a script:
+
+```
+qb add https://example.com/big.iso                    add and start (QuickByte is started if needed)
+qb add URL1 URL2 --queue Night                        file them into a queue (created if missing)
+qb add URL -o D:\Isos -n disc.iso -c 16 --checksum sha256:…
+qb add https://cdn.example.com/talk/master.m3u8 --quality 720p
+qb list [--status active|paused|queued|completed|failed|all] [--json]
+qb pause 3f9c | qb resume all
+qb queues [--json] | qb queue start Night | qb queue stop Night
+qb status [--json]
+```
+
+Exit codes: `0` done, `1` QuickByte refused or failed (a link that could not be
+added, an unknown id), `2` a usage mistake, `3` QuickByte is not running. `--json`
+prints the response itself, camel-cased, for scripts.
+
+- **Nothing is decided in `qb`.** It parses the command line
+  (`Core/Commands/CommandLine`, tested), resolves a relative `--folder` against
+  its own working directory, and sends the request over a named pipe. The app's
+  `CommandProcessor` carries it out on the UI thread through the same managers the
+  windows use: the link is probed, named, reserved, filed into a queue or started
+  exactly as Add Download would — without opening a details window over whatever
+  the user is doing. A streaming video gets the quality `--quality` names
+  (`best`, the default; `worst`; or part of a label).
+- **A login in a link** (`https://user:pass@host/…`) is lifted into the download's
+  encrypted credentials, as in the Add window.
+- **Adding work starts QuickByte** (minimized, from beside `qb.exe`, never from
+  PATH) when it is not running; reading state (`list`, `status`) just says it is
+  not running.
+- **The pipe is this user's only.** `QuickByte.Command.<user>` is created and
+  opened with `PipeOptions.CurrentUserOnly`: its access list names only the
+  current user, and the client checks the server's owner before sending — another
+  account can neither add downloads nor impersonate QuickByte to `qb`. Requests are
+  capped in size, and a malformed one is answered, not fatal.
+- A download's id is the one `qb list` prints; any unambiguous start of it (four
+  characters or more) will do.
 
 ## Browser integration
 

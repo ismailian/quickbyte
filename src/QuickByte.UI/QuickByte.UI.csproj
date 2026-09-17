@@ -50,6 +50,7 @@
   -->
   <ItemGroup>
     <ProjectReference Include="..\QuickByte.Agent\QuickByte.Agent.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\QuickByte.Cli\QuickByte.Cli.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <!--
@@ -81,6 +82,29 @@
     <Error Condition="'@(SchedulerAgentFiles)' == ''" Text="The scheduler agent produced no output to copy from $(SchedulerAgentDir) — QuickByte would ship without a background scheduler." />
 
     <Copy SourceFiles="@(SchedulerAgentFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!--
+    qb.exe, the command-line tool, for the same reason and in the same way as the
+    agent: it starts QuickByte.exe from its own folder when a command needs the
+    app, so it has to sit beside it, in a dev build and in the installer's [Files].
+  -->
+  <Target Name="CopyCommandLineTool" AfterTargets="Build">
+    <MSBuild Projects="..\QuickByte.Cli\QuickByte.Cli.csproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration)">
+      <Output TaskParameter="TargetOutputs" ItemName="CommandLineToolTarget" />
+    </MSBuild>
+
+    <PropertyGroup>
+      <CommandLineToolDir>@(CommandLineToolTarget->'%(RootDir)%(Directory)')</CommandLineToolDir>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <CommandLineToolFiles Include="$(CommandLineToolDir)qb.*" />
+    </ItemGroup>
+
+    <Error Condition="'@(CommandLineToolFiles)' == ''" Text="The command-line tool produced no output to copy from $(CommandLineToolDir)." />
+
+    <Copy SourceFiles="@(CommandLineToolFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>
 
 </Project>
