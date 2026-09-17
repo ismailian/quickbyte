@@ -93,9 +93,14 @@ public sealed class RemoteFileInfoProvider : IRemoteFileInfoProvider
 
         try
         {
-            using var headRequest = new HttpRequestMessage(HttpMethod.Head, url);
-            HttpRequestDecorator.Apply(headRequest, options);
-            using var headResponse = await _client.SendAsync(headRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            HttpRequestMessage BuildHead()
+            {
+                var headRequest = new HttpRequestMessage(HttpMethod.Head, url);
+                HttpRequestDecorator.Apply(headRequest, options);
+                return headRequest;
+            }
+
+            using var headResponse = await AuthenticatedHttp.SendAsync(_client, BuildHead, options, cancellationToken, _client.Timeout)
                 .ConfigureAwait(false);
 
             // A 401 here is deliberately not a credentials prompt. HEAD is not
@@ -189,15 +194,19 @@ public sealed class RemoteFileInfoProvider : IRemoteFileInfoProvider
     private async Task<HttpResponseMessage> SendRangedProbeAsync(
         string url, RequestOptions? options, CancellationToken cancellationToken)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, 0);
-        HttpRequestDecorator.Apply(request, options);
+        HttpRequestMessage Build()
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, 0);
+            HttpRequestDecorator.Apply(request, options);
+            return request;
+        }
 
-        // ResponseHeadersRead: a server that ignores the range is about to start
-        // sending the entire file, and the status line is all this needs.
-        // Disposing the response is what stops it.
-        return await _client
-            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+        // ResponseHeadersRead (which AuthenticatedHttp always asks for): a server
+        // that ignores the range is about to start sending the entire file, and the
+        // status line is all this needs. Disposing the response is what stops it.
+        return await AuthenticatedHttp
+            .SendAsync(_client, Build, options, cancellationToken, _client.Timeout)
             .ConfigureAwait(false);
     }
 

@@ -726,6 +726,18 @@ connection shares one static `HttpClient`, so `HttpClientHandler.Credentials`
 is not available, and presenting the header up front also saves a round trip
 on each of up to 32 connections.
 
+**Digest, NTLM and Negotiate** — what Windows servers, intranet shares and many
+appliances ask for — work too. None of them can be sent up front (Digest answers a
+nonce; NTLM and Negotiate are a handshake bound to one connection), and the
+handler only performs them when its own `Credentials` hold the login. So when a
+request that carried a login is refused with a `401` offering one of them,
+`AuthenticatedHttp` sends it again through a client of its own for that login and
+that server, which does the handshake, and remembers the server so later
+connections go there directly. The login is registered for that origin only: a
+redirect to another host is never answered with it, and a challenge that came
+from one is not retried. `DOMAIN\user` is split for NTLM; `user@domain` is passed
+whole. A `401` offering only Basic is still a rejected password.
+
 Credentials live on the `DownloadItem`, so a download paused for three days
 still presents the same login when it resumes. The password is **never written
 to `downloads.json` in the clear**: `DownloadCredentials.Password` is
@@ -1059,7 +1071,6 @@ can never drift from the one the windows draw.
 This is a complete, working reference implementation, not a byte-for-byte
 IDM clone. A few things a production build would add:
 - A signed installer.
-- HTTP authentication schemes beyond Basic (Digest, NTLM, negotiate).
 - Muxing a stream's separate sound back into its video, DRM-protected and live
   streams, and DASH manifests with more than one period (only the first is read).
 - A packed, store-published browser extension — the one in `browser/` is

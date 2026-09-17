@@ -261,18 +261,22 @@ public sealed class DownloadConnection : IResizableConnection
     private async Task<HttpResponseMessage> SendRangeAsync(
         long start, RangeConditionHeaderValue? ifRange, CancellationToken cancellationToken)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, _url);
+        HttpRequestMessage Build()
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, _url);
 
-        // An open-ended "bytes=start-" when there is no known end. The sentinel
-        // written out as a literal 9223372036854775806 is a range a fair number
-        // of servers answer with 416 instead of the rest of the file.
-        request.Headers.Range = new RangeHeaderValue(start, IsUnbounded ? null : RangeEnd);
-        HttpRequestDecorator.Apply(request, _options);
-        if (ifRange is not null) request.Headers.IfRange = ifRange;
+            // An open-ended "bytes=start-" when there is no known end. The sentinel
+            // written out as a literal 9223372036854775806 is a range a fair number
+            // of servers answer with 416 instead of the rest of the file.
+            request.Headers.Range = new RangeHeaderValue(start, IsUnbounded ? null : RangeEnd);
+            HttpRequestDecorator.Apply(request, _options);
+            if (ifRange is not null) request.Headers.IfRange = ifRange;
+            return request;
+        }
 
-        var response = await _httpClient
-            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-            .ConfigureAwait(false);
+        // Through a signed-in client of its own when the server wants Digest, NTLM
+        // or Negotiate rather than the Basic the decorator sends. See AuthenticatedHttp.
+        var response = await AuthenticatedHttp.SendAsync(_httpClient, Build, _options, cancellationToken).ConfigureAwait(false);
 
         try
         {

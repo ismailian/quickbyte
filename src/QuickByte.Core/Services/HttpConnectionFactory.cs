@@ -16,9 +16,25 @@ public sealed class HttpConnectionFactory : IConnectionFactory
 {
     internal static readonly HttpClient SharedClient = CreateClient();
 
+    internal const string UserAgent = "QuickByte/1.0 (+https://github.com/quickbyte)";
+
     private static HttpClient CreateClient()
     {
-        var handler = new SocketsHttpHandler
+        var client = new HttpClient(CreateHandler())
+        {
+            Timeout = Timeout.InfiniteTimeSpan // per-request cancellation handled via CancellationToken
+        };
+        client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
+        return client;
+    }
+
+    /// <summary>
+    /// The handler every download client is built on — the shared one, and each
+    /// signed-in one <see cref="AuthenticatedHttp"/> makes — so a download that needs
+    /// NTLM goes through the same proxy with the same cookie rules as any other.
+    /// </summary>
+    internal static SocketsHttpHandler CreateHandler() =>
+        new()
         {
             MaxConnectionsPerServer = DownloadSettings.MaxConnections + 4,
             PooledConnectionLifetime = TimeSpan.FromMinutes(10),
@@ -33,13 +49,6 @@ public sealed class HttpConnectionFactory : IConnectionFactory
             // fighting over one request. Nothing here needs a cookie jar.
             UseCookies = false
         };
-        var client = new HttpClient(handler)
-        {
-            Timeout = Timeout.InfiniteTimeSpan // per-request cancellation handled via CancellationToken
-        };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("QuickByte/1.0 (+https://github.com/quickbyte)");
-        return client;
-    }
 
     public IDownloadConnection Create(
         int connectionId,

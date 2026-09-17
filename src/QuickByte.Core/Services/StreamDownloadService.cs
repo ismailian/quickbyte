@@ -321,21 +321,24 @@ public sealed class StreamDownloadService : IDownloadService
 
         long firstByte = (piece.Range?.Offset ?? 0) + have;
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, piece.Uri);
-        HttpRequestDecorator.Apply(request, options);
-        if (piece.Range is { } range) request.Headers.Range = new RangeHeaderValue(firstByte, range.End);
-        else if (have > 0) request.Headers.Range = new RangeHeaderValue(firstByte, null);
+        bool ranged = piece.Range is not null || have > 0;
+        HttpRequestMessage Build()
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, piece.Uri);
+            HttpRequestDecorator.Apply(request, options);
+            if (piece.Range is { } range) request.Headers.Range = new RangeHeaderValue(firstByte, range.End);
+            else if (have > 0) request.Headers.Range = new RangeHeaderValue(firstByte, null);
+            return request;
+        }
 
-        using var response = await _client
-            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token)
-            .ConfigureAwait(false);
+        using var response = await AuthenticatedHttp.SendAsync(_client, Build, options, token).ConfigureAwait(false);
         StreamFetch.EnsureSuccess(response, options);
 
         // Checked before a byte is written, for the reason DownloadConnection
         // checks: a server that ignores a range says so only in its status line.
         long skip = 0;
         bool partial = response.StatusCode == HttpStatusCode.PartialContent;
-        if (request.Headers.Range is not null)
+        if (ranged)
         {
             if (partial && response.Content.Headers.ContentRange?.From is long from && from != firstByte)
                 throw new IOException($"The server answered a request for byte {firstByte} with a range starting at {from}.");
@@ -446,10 +449,14 @@ public sealed class StreamDownloadService : IDownloadService
 
     private async Task<byte[]> FetchKeyAsync(Uri uri, RequestOptions options, CancellationToken token)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-        HttpRequestDecorator.Apply(request, options);
+        HttpRequestMessage Build()
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            HttpRequestDecorator.Apply(request, options);
+            return request;
+        }
 
-        using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+        using var response = await AuthenticatedHttp.SendAsync(_client, Build, options, token).ConfigureAwait(false);
         StreamFetch.EnsureSuccess(response, options);
 
         await using var body = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);

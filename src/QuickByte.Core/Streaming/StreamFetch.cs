@@ -24,12 +24,14 @@ internal static class StreamFetch
     {
         if (!StreamPlan.IsWeb(uri)) throw new FormatException("A stream's playlist has to be on the web (http or https).");
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-        HttpRequestDecorator.Apply(request, options);
+        HttpRequestMessage Build()
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            HttpRequestDecorator.Apply(request, options);
+            return request;
+        }
 
-        using var response = await client
-            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-            .ConfigureAwait(false);
+        using var response = await Services.AuthenticatedHttp.SendAsync(client, Build, options, cancellationToken).ConfigureAwait(false);
         EnsureSuccess(response, options);
 
         if (response.Content.Headers.ContentLength > MaxDocumentBytes)
