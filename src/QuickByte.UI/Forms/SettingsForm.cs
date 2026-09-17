@@ -55,6 +55,7 @@ public sealed class SettingsForm : Form
     private TextBox _clipboardTypesTextBox = null!;
     private CheckBox _startWithWindowsCheckBox = null!;
     private CheckBox _startMinimizedCheckBox = null!;
+    private CheckBox _keepAwakeCheckBox = null!;
     private ComboBox _proxyModeBox = null!;
     private ComboBox _proxyKindBox = null!;
     private TextBox _proxyHostTextBox = null!;
@@ -98,7 +99,7 @@ public sealed class SettingsForm : Form
         BuildConnectionTab(tabs.AddPage("Connection"));
         BuildFoldersTab(tabs.AddPage("Folders"));
         BuildInterfaceTab(tabs.AddPage("Interface"));
-        BuildStartupTab(tabs.AddPage("Startup"));
+        BuildStartupTab(tabs.AddPage("System"));
         BuildProxyTab(tabs.AddPage("Proxy"));
         BuildBrowserTab(tabs.AddPage("Browser"));
 
@@ -293,7 +294,7 @@ public sealed class SettingsForm : Form
     /// </summary>
     private void BuildStartupTab(Panel page)
     {
-        var layout = NewGrid(page, rows: 4);
+        var layout = NewGrid(page, rows: 6);
         int row = 0;
 
         _startWithWindowsCheckBox = AddCheckRow(layout, row++,
@@ -307,6 +308,12 @@ public sealed class SettingsForm : Form
         AddNoteRow(layout, row++,
             "Applies to every launch, not only the one Windows performs at sign-in. "
             + "Downloads still resume; double-click the tray icon to open the window.");
+
+        _keepAwakeCheckBox = AddCheckRow(layout, row++,
+            "Keep the computer awake while downloads are running");
+        AddNoteRow(layout, row++,
+            "Stops Windows sleeping when idle until the last download stops. "
+            + "Closing the lid or choosing Sleep still sleeps.");
     }
 
     /// <summary>
@@ -713,6 +720,7 @@ public sealed class SettingsForm : Form
         // the box honest on a profile where the write never landed.
         _startWithWindowsCheckBox.Checked = StartupRegistration.IsEnabled || s.StartWithWindows;
         _startMinimizedCheckBox.Checked = s.StartMinimized;
+        _keepAwakeCheckBox.Checked = s.KeepAwakeWhileDownloading;
 
         _proxyModeBox.SelectedItem = Enum.IsDefined(s.Proxy.Mode) ? s.Proxy.Mode : ProxyMode.System;
         _proxyKindBox.SelectedItem = Enum.IsDefined(s.Proxy.Kind) ? s.Proxy.Kind : ProxyKind.Http;
@@ -787,6 +795,7 @@ public sealed class SettingsForm : Form
             ClipboardFileTypes = string.Join(' ', ClipboardLinks.ParseFileTypes(_clipboardTypesTextBox.Text)),
             StartWithWindows = _startWithWindowsCheckBox.Checked,
             StartMinimized = _startMinimizedCheckBox.Checked,
+            KeepAwakeWhileDownloading = _keepAwakeCheckBox.Checked,
             BrowserIntegrationEnabled = _browserIntegrationCheckBox.Checked,
             BrowserIntegrationPort = (int)_browserPortUpDown.Value,
             // Read back from Current rather than from the read-only field: the

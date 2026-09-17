@@ -95,6 +95,11 @@ internal static class Program
             // stopped working.
             QueueAgentRegistration.Sync(queueManager.HasScheduledQueues);
 
+            // And the wake timer for any queue that asked to wake the computer,
+            // re-asserted for the same reason: the task names the agent by path.
+            // Unawaited — it runs schtasks.exe, off the UI thread.
+            _ = QueueWakeRegistration.SyncAsync(queueManager.Queues);
+
             // Only meaningful once the list is loaded — until then every folder
             // looks unclaimed. Deliberately not awaited: it walks the temp
             // volume, and nothing on screen depends on the result.

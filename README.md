@@ -333,7 +333,7 @@ enabled — so:
 
 | Value name | Written by | What it is | Task Manager shows |
 |---|---|---|---|
-| `QuickByte` | `StartupRegistration` | Options > Startup's *Start with Windows* | QuickByte |
+| `QuickByte` | `StartupRegistration` | Options > System's *Start with Windows* | QuickByte |
 | `QuickByteScheduler` | `QueueAgentRegistration` | The queue scheduler agent | QuickByte Queue Scheduler |
 
 They are independent: either can be present without the other, and the labels in
@@ -358,9 +358,34 @@ Manager's Startup tab, and is the earliest moment a per-user download queue
 means anything at all. The agent survives QuickByte closing, crashing or being
 updated, which is the property that was actually being asked for.
 
-The one thing this cannot do is *wake a sleeping machine* — that needs a Task
-Scheduler task with a wake trigger. A queue scheduled while the machine is
-asleep starts when it wakes, if that is within the schedule's window.
+**Waking a sleeping computer.** A queue's Schedule tab has **Wake the computer
+to start it**. The agent cannot do that on its own — nothing runs while the
+machine sleeps — so QuickByte registers a Task Scheduler task for the user,
+`QuickByte Queue Wake (<user>)`, with one weekly trigger per start time
+(`WakeTimes`: queues starting at the same minute share one, on all their days)
+and `WakeToRun` set. That is the one place a program without administrator
+rights can set a persistent wake timer; it was checked on a standard account
+rather than assumed.
+
+- The task runs as the signed-in user, only while they are signed in, with
+  least privilege, and its action is `QuickByte.Agent.exe --once` — one look at
+  the schedules, which finds the queue due and launches QuickByte.
+- It is written through `schtasks.exe` (by full path) from an XML definition,
+  re-asserted at each launch and on every queue change, and deleted when no
+  queue asks for a wake. Uninstalling deletes it too. `QueueWakeRegistration`
+  skips the process entirely when nothing changed.
+- **Windows must allow wake timers** (Power Options > Sleep > Allow wake
+  timers). On many laptops they are off on battery, and Modern Standby machines
+  honour them only on AC power; the queue window says so when wake is ticked.
+- Once awake, the machine has to *stay* awake, or Windows puts it back to sleep
+  two minutes after a wake nobody touched. **Keep the computer awake while
+  downloads are running** (Options > System, on by default) holds a power
+  request while anything is downloading (`KeepAwake`) — idle sleep only; the
+  lid, the power button and Start > Sleep still work, and `powercfg /requests`
+  names QuickByte while it holds one.
+
+Without **Wake the computer**, a queue scheduled while the machine is asleep
+starts when it wakes, if that is within the schedule's window.
 
 **When a queue finishes.** A queue's Options tab also says what to do once a
 run has worked through every file: nothing, exit QuickByte, sleep, hibernate or
@@ -780,6 +805,7 @@ directly to `DownloadSettings`:
 | Show the download complete window | on |
 | Start QuickByte when Windows starts | off |
 | Start minimized to the notification area | off |
+| Keep the computer awake while downloads are running | on |
 | Browser integration | on |
 | Browser bridge port | 1024–65535, default 9614 |
 | Browser pairing token | generated on first use |
@@ -835,7 +861,8 @@ forms Windows takes). This machine is never reached through a proxy.
 A proxy sees the address of every download, and HTTP and SOCKS proxies receive
 their password unencrypted; the tab says so.
 
-The two startup settings are on the **Startup** tab. "Start with Windows"
+The two startup settings are on the **System** tab, beside keeping the computer
+awake while downloads run. "Start with Windows"
 writes a value under `HKCU\...\CurrentVersion\Run` — per-user, no elevation,
 and visible in Task Manager's Startup tab so it can be turned off from there
 too; QuickByte re-asserts it at each launch, which is what keeps it pointing at
@@ -987,7 +1014,6 @@ can never drift from the one the windows draw.
 This is a complete, working reference implementation, not a byte-for-byte
 IDM clone. A few things a production build would add:
 - A signed installer.
-- Waking a sleeping machine for a scheduled queue — see Queues and scheduling.
 - HTTP authentication schemes beyond Basic (Digest, NTLM, negotiate).
 - Muxing a stream's separate sound back into its video, DRM-protected and live
   streams, and DASH manifests with more than one period (only the first is read).

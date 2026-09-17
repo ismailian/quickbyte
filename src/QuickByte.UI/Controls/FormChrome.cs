@@ -39,7 +39,8 @@ public static class FormChrome
             Height = 20,
             ForeColor = Theme.TextMuted,
             Font = Theme.UiSmall,
-            AutoEllipsis = true
+            AutoEllipsis = true,
+            UseMnemonic = false
         });
         text.Controls.Add(new Label
         {
@@ -48,7 +49,9 @@ public static class FormChrome
             Height = 26,
             ForeColor = Theme.Text,
             Font = Theme.TitleBold,
-            AutoEllipsis = true
+            AutoEllipsis = true,
+            // A title is text, not a mnemonic: "Queues & Scheduler" lost its "&".
+            UseMnemonic = false
         });
 
         header.Controls.Add(text);

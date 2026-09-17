@@ -210,6 +210,15 @@ public sealed class DownloadSettings
     /// </summary>
     public bool StartMinimized { get; set; }
 
+    /// <summary>
+    /// Hold off the computer's idle sleep while downloads are running. On by
+    /// default, as a download manager is expected to: an overnight download used
+    /// to stop an hour in when the machine went to sleep, and a queue woken at
+    /// 03:00 went back to sleep two minutes later. Lid, power button and Start &gt;
+    /// Sleep still sleep.
+    /// </summary>
+    public bool KeepAwakeWhileDownloading { get; set; } = true;
+
     /// <summary>Pop the download details window open as soon as a download is added.</summary>
     public bool AutoOpenDetailsWindow { get; set; } = true;
 

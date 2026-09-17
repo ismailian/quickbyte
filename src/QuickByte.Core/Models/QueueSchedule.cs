@@ -51,6 +51,14 @@ public sealed class QueueSchedule
     /// </summary>
     public TimeSpan StopTime { get; set; } = TimeSpan.FromHours(7);
 
+    /// <summary>
+    /// Wake the computer from sleep or hibernation to start this queue. Off by
+    /// default: a machine switching itself on in the night is something to ask
+    /// for, not to find out about. The wake timer itself is a Windows concept and
+    /// is set by the UI project; the scheduler agent only reads this.
+    /// </summary>
+    public bool WakeComputer { get; set; }
+
     public bool RunsOn(DayOfWeek day) => (Days & ToFlag(day)) != 0;
 
     public static ScheduleDays ToFlag(DayOfWeek day) => (ScheduleDays)(1 << (int)day);
@@ -116,6 +124,7 @@ public sealed class QueueSchedule
         Days = Days,
         StartTime = StartTime,
         StopAtEnabled = StopAtEnabled,
-        StopTime = StopTime
+        StopTime = StopTime,
+        WakeComputer = WakeComputer
     };
 }

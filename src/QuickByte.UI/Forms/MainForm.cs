@@ -121,6 +121,9 @@ public sealed class MainForm : Form
     /// <summary>Listening only while Options says to — see <see cref="SyncClipboardWatcher"/>.</summary>
     private readonly ClipboardWatcher _clipboardWatcher = new();
 
+    /// <summary>Held while anything is downloading, so the machine does not idle into sleep mid-file. See <see cref="KeepAwake"/>.</summary>
+    private readonly KeepAwake _keepAwake = new();
+
     /// <summary>The last link offered, so copying it twice does not offer it twice.</summary>
     private string? _lastClipboardOffer;
 
@@ -209,6 +212,7 @@ public sealed class MainForm : Form
         {
             _animationTimer.Dispose();
             _clipboardWatcher.Dispose();
+            _keepAwake.Dispose();
             _trayIcon.Dispose();
         };
 
@@ -1389,6 +1393,10 @@ public sealed class MainForm : Form
         // Same numbers on the tray tooltip: with the window hidden it is the only
         // place they are readable.
         _trayIcon.UpdateTooltip(active, totalSpeed);
+
+        // Read on every update rather than when Options closes: it is one bool,
+        // and the count it is paired with changes far more often.
+        _keepAwake.Update(active > 0 && _settingsService.Current.KeepAwakeWhileDownloading);
     }
 
     // ------------------------------------------------------------ Actions --
@@ -1943,7 +1951,11 @@ public sealed class MainForm : Form
     /// has to also happen when a queue changes from somewhere else — and because
     /// it must survive that window being closed.
     /// </summary>
-    private void SyncSchedulerAgent() => QueueAgentRegistration.Sync(_queueManager.HasScheduledQueues);
+    private void SyncSchedulerAgent()
+    {
+        QueueAgentRegistration.Sync(_queueManager.HasScheduledQueues);
+        _ = QueueWakeRegistration.SyncAsync(_queueManager.Queues);
+    }
 
     /// <summary>
     /// Starts a queue because the scheduler agent said its time had come — see

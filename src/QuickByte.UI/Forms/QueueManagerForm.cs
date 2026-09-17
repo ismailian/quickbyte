@@ -45,6 +45,7 @@ public sealed class QueueManagerForm : Form
     private readonly Dictionary<DayOfWeek, CheckBox> _dayCheckBoxes = new();
     private DateTimePicker _startTimePicker;
     private CheckBox _stopAtCheckBox;
+    private CheckBox _wakeCheckBox;
     private DateTimePicker _stopTimePicker;
 
     private Button _startButton;
@@ -283,14 +284,14 @@ public sealed class QueueManagerForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 2,
-            RowCount = 6,
+            RowCount = 7,
             BackColor = Theme.Surface
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        foreach (int height in new[] { 34, 40, 40, 40 })
+        foreach (int height in new[] { 34, 40, 40, 40, 36 })
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 56));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 76));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         int row = 0;
@@ -356,6 +357,20 @@ public sealed class QueueManagerForm : Form
         layout.Controls.Add(_stopAtCheckBox, 0, row);
         _stopTimePicker = TimePicker();
         layout.Controls.Add(_stopTimePicker, 1, row++);
+
+        _wakeCheckBox = new CheckBox
+        {
+            Text = "Wake the computer to start it",
+            AutoSize = true,
+            Font = Theme.Ui,
+            ForeColor = Theme.Text,
+            BackColor = Theme.Surface,
+            Margin = new Padding(0, 8, 0, 0),
+            Anchor = AnchorStyles.Left
+        };
+        layout.Controls.Add(_wakeCheckBox, 0, row);
+        layout.SetColumnSpan(_wakeCheckBox, 2);
+        row++;
 
         _scheduleNoteLabel = new Label
         {
@@ -435,6 +450,7 @@ public sealed class QueueManagerForm : Form
         _whenFinishedBox.SelectedIndexChanged += (_, _) => ApplyEdits();
         _scheduleEnabledCheckBox.CheckedChanged += (_, _) => ApplyEdits();
         _stopAtCheckBox.CheckedChanged += (_, _) => ApplyEdits();
+        _wakeCheckBox.CheckedChanged += (_, _) => ApplyEdits();
         _startTimePicker.ValueChanged += (_, _) => ApplyEdits();
         _stopTimePicker.ValueChanged += (_, _) => ApplyEdits();
 
@@ -598,6 +614,7 @@ public sealed class QueueManagerForm : Form
             _startTimePicker.Value = TimeToPickerValue(schedule.StartTime);
             _stopAtCheckBox.Checked = schedule.StopAtEnabled;
             _stopTimePicker.Value = TimeToPickerValue(schedule.StopTime);
+            _wakeCheckBox.Checked = schedule.WakeComputer;
         }
         finally
         {
@@ -641,7 +658,8 @@ public sealed class QueueManagerForm : Form
             Days = SelectedDays(),
             StartTime = _startTimePicker.Value.TimeOfDay,
             StopAtEnabled = _stopAtCheckBox.Checked,
-            StopTime = _stopTimePicker.Value.TimeOfDay
+            StopTime = _stopTimePicker.Value.TimeOfDay,
+            WakeComputer = _wakeCheckBox.Checked
         };
 
         _queueManager.Update(queue);
@@ -787,12 +805,18 @@ public sealed class QueueManagerForm : Form
 
         string next = nextRun is { } when ? $"Next start: {when:ddd d MMM, HH:mm}. " : string.Empty;
 
+        // Said only when asked for: the caveat is Windows' power options, which is
+        // where a wake that never happens has to be looked for.
+        string wake = queue.Schedule.WakeComputer
+            ? " A sleeping computer is woken for it, if Windows' power options allow wake timers."
+            : string.Empty;
+
         if (!QueueAgentRegistration.IsAvailable)
             return next + "QuickByte must be running (a window or the notification area) at that time — "
-                        + "the background scheduler is not installed with this copy.";
+                        + "the background scheduler is not installed with this copy." + wake;
 
         return next + "QuickByte does not need to be open: the background scheduler starts with Windows "
-                    + "and launches QuickByte when the time comes.";
+                    + "and launches QuickByte when the time comes." + wake;
     }
 
     private void UpdateCommandStates()
@@ -811,6 +835,7 @@ public sealed class QueueManagerForm : Form
         _whenFinishedBox.Enabled = hasQueue;
         _scheduleEnabledCheckBox.Enabled = hasQueue;
         _stopAtCheckBox.Enabled = hasQueue;
+        _wakeCheckBox.Enabled = hasQueue && _scheduleEnabledCheckBox.Checked;
         _startTimePicker.Enabled = hasQueue && _scheduleEnabledCheckBox.Checked;
         _stopTimePicker.Enabled = hasQueue && _scheduleEnabledCheckBox.Checked && _stopAtCheckBox.Checked;
         foreach (var box in _dayCheckBoxes.Values)
