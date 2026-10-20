@@ -1,5 +1,3 @@
-using System.Threading;
-using System.Net.Http;
 using QuickByte.Core.Interfaces;
 using QuickByte.Core.Models;
 using QuickByte.Core.Services.Proxy;
@@ -16,7 +14,7 @@ public sealed class HttpConnectionFactory : IConnectionFactory
 {
     internal static readonly HttpClient SharedClient = CreateClient();
 
-    internal const string UserAgent = "QuickByte/1.0 (+https://github.com/quickbyte)";
+    internal const string UserAgent = "QuickByte/1.0 (+https://github.com/ismailian/quickbyte)";
 
     private static HttpClient CreateClient()
     {
@@ -26,6 +24,17 @@ public sealed class HttpConnectionFactory : IConnectionFactory
         };
         client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
         return client;
+    }
+
+    private static HttpClient SetUserAgent(DownloadSettings downloadSettings)
+    {
+        if (!string.IsNullOrEmpty(downloadSettings.CustomUserAgent))
+        {
+            SharedClient.DefaultRequestHeaders.UserAgent.Clear();
+            SharedClient.DefaultRequestHeaders.UserAgent.ParseAdd(downloadSettings.CustomUserAgent);
+        }
+
+        return SharedClient;
     }
 
     /// <summary>
@@ -62,7 +71,11 @@ public sealed class HttpConnectionFactory : IConnectionFactory
         RequestOptions? options = null)
     {
         return new DownloadConnection(
-            SharedClient, connectionId, url, rangeStart, rangeEnd, alreadyDownloaded, chunkFilePath,
-            settings, bandwidthLimiter, options);
+            SetUserAgent(settings),
+            connectionId, url,
+            rangeStart, rangeEnd, alreadyDownloaded,
+            chunkFilePath,
+            settings, bandwidthLimiter, options
+        );
     }
 }

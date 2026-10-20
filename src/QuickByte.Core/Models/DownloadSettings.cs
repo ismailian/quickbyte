@@ -50,6 +50,12 @@ public sealed class DownloadSettings
     public int RetryDelayMilliseconds { get; set; } = 1500;
 
     /// <summary>
+    /// Custom User-Agent.
+    /// This property is used to override the default value sent in the User-Agent header with every http request.
+    /// </summary>
+    public string CustomUserAgent { get; set; } = null!;
+
+    /// <summary>
     /// Folder finished downloads are saved to by default. An ordinary setting
     /// with an ordinary default — Options still offers it, and Add Download's
     /// "Save to" overrides it for a single file. Unlike <see cref="TempFolder"/>

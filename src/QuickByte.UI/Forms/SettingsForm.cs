@@ -44,6 +44,7 @@ public sealed class SettingsForm : Form
     private NumericUpDown _maxConcurrentUpDown = null!;
     private NumericUpDown _globalSpeedLimitUpDown = null!;
     private NumericUpDown _progressIntervalUpDown = null!;
+    private TextBox _customUserAgent = null!;
     private TextBox _downloadFolderTextBox = null!;
     private CheckBox _autoOpenDetailsCheckBox = null!;
     private CheckBox _showCompletionCheckBox = null!;
@@ -86,7 +87,7 @@ public sealed class SettingsForm : Form
         Text = "QuickByte Options";
         Width = 600;
         // Sized for the tallest tab — Interface, at six rows of 58 px.
-        Height = 618;
+        Height = 650;
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -136,6 +137,10 @@ public sealed class SettingsForm : Form
             "Retry base delay (ms)",
             "Grows with exponential backoff on each successive retry.",
             100, 60000, increment: 100);
+
+        _customUserAgent = AddTextRow(layout, row++,
+            "Custom User-Agent",
+            "A custom User-Agent value for the http connection.");
 
         _dynamicSegmentationCheckBox = AddCheckRow(layout, row++,
             "Split the slowest segment when a connection finishes early");
@@ -697,6 +702,7 @@ public sealed class SettingsForm : Form
         _dynamicSegmentationCheckBox.Checked = s.DynamicSegmentation;
         _maxConcurrentUpDown.Value = Math.Clamp(s.MaxConcurrentDownloads, 1, 20);
         _globalSpeedLimitUpDown.Value = Math.Clamp(s.GlobalSpeedLimitBytesPerSecond / ByteFormatter.BytesPerKilobyte, 0, 1_000_000);
+        _customUserAgent.Text = s.CustomUserAgent;
         _progressIntervalUpDown.Value = Math.Clamp(s.ProgressUpdateIntervalMilliseconds, 50, 2000);
         // Abbreviated the same way Add Download's "Save to" is, and read back
         // through UserPath.Expand in OnSaveClicked — see UserPath for why the
@@ -776,6 +782,7 @@ public sealed class SettingsForm : Form
             DynamicSegmentation = _dynamicSegmentationCheckBox.Checked,
             MaxConcurrentDownloads = (int)_maxConcurrentUpDown.Value,
             GlobalSpeedLimitBytesPerSecond = (long)_globalSpeedLimitUpDown.Value * ByteFormatter.BytesPerKilobyte,
+            CustomUserAgent = _customUserAgent.Text,
             ProgressUpdateIntervalMilliseconds = (int)_progressIntervalUpDown.Value,
             // Expanded, never the displayed text: this value is persisted and is
             // what Directory.CreateDirectory below is handed, and a literal "~"
