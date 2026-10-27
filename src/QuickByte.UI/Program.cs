@@ -1,5 +1,6 @@
 using System.Threading;
 using System.Windows.Forms;
+using QuickByte.Core.Helpers;
 using QuickByte.Core.Interfaces;
 using QuickByte.Core.Commands;
 using QuickByte.Core.Services;
@@ -52,7 +53,22 @@ internal static class Program
             // so it is kept in step with Options live — a proxy that needs a restart
             // to apply is one the user will assume is broken. See AppProxy.
             AppProxy.Shared.Configure(settingsService.Current.Proxy);
-            settingsService.SettingsChanged += (_, settings) => AppProxy.Shared.Configure(settings.Proxy);
+
+            // And the same for the User-Agent every request presents, for the same
+            // reason: it is typed in to get past a server that is refusing one
+            // right now. Read per request rather than written onto the shared
+            // clients, which cannot be re-stamped while requests are in flight.
+            // See AppUserAgent.
+            AppUserAgent.Configure(settingsService.Current.CustomUserAgent);
+
+            // One handler, not two: SettingsChanged's subscribers are counted in
+            // CLAUDE.md because each one is a decision that a setting applies
+            // without a restart.
+            settingsService.SettingsChanged += (_, settings) =>
+            {
+                AppProxy.Shared.Configure(settings.Proxy);
+                AppUserAgent.Configure(settings.CustomUserAgent);
+            };
 
             var repository = new DownloadRepository();
             var queueRepository = new QueueRepository();

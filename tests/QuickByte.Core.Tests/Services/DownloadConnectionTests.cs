@@ -317,6 +317,47 @@ public sealed class DownloadConnectionTests
         Assert.Null(stub.IfRanges.Single());
     }
 
+    // ------------------------------------------------------- who is asking --
+
+    [Fact]
+    public async Task A_segment_says_who_is_asking()
+    {
+        // Some servers refuse a client they do not recognise — a 403, or a
+        // landing page served as a 200 — so every segment has to carry an agent.
+        // What it carries is AppUserAgent.Current, which Options sets; this pins
+        // that the connection asks for one at all.
+        using var folder = new TempFolder();
+        using var stub = new StubServer(_ => Partial(File100, 0, 99, 100));
+
+        await Connection(stub, folder.File("part0.tmp"), 0, 99).RunAsync(CancellationToken.None);
+
+        Assert.False(string.IsNullOrWhiteSpace(stub.UserAgents.Single()));
+    }
+
+    [Fact]
+    public async Task A_segment_presents_the_browsers_agent_when_the_link_was_captured()
+    {
+        // The pair matters: a server that ties a session to the agent it issued
+        // the cookie to answers a mismatch with the sign-in page. So a captured
+        // agent is sent in place of the configured one, not beside it.
+        using var folder = new TempFolder();
+        using var stub = new StubServer(_ => Partial(File100, 0, 99, 100));
+
+        var options = new RequestOptions
+        {
+            Headers = new Dictionary<string, string>
+            {
+                ["Cookie"] = "session=abc",
+                ["User-Agent"] = "Mozilla/5.0 (a browser)"
+            }
+        };
+
+        await Connection(stub, folder.File("part0.tmp"), 0, 99, options: options)
+            .RunAsync(CancellationToken.None);
+
+        Assert.Equal("Mozilla/5.0 (a browser)", stub.UserAgents.Single());
+    }
+
     // --------------------------------------------------------- challenges --
 
     [Fact]
@@ -433,6 +474,12 @@ public sealed class DownloadConnectionTests
         /// <summary>The If-Range header of each request, in order; null where there was none.</summary>
         public List<string?> IfRanges => _handler.IfRanges;
 
+        /// <summary>
+        /// The raw User-Agent of each request, in order. Raw rather than read back
+        /// through the typed collection, which re-assembles it from product tokens.
+        /// </summary>
+        public List<string?> UserAgents => _handler.UserAgents;
+
         public void Dispose() => Client.Dispose();
 
         private sealed class Handler : HttpMessageHandler
@@ -445,6 +492,8 @@ public sealed class DownloadConnectionTests
 
             public List<string?> IfRanges { get; } = new();
 
+            public List<string?> UserAgents { get; } = new();
+
             protected override Task<HttpResponseMessage> SendAsync(
                 HttpRequestMessage request, CancellationToken cancellationToken)
             {
@@ -452,6 +501,9 @@ public sealed class DownloadConnectionTests
                 // response comes back.
                 Ranges.Add(request.Headers.Range?.ToString() ?? string.Empty);
                 IfRanges.Add(request.Headers.IfRange?.ToString());
+                UserAgents.Add(request.Headers.NonValidated.TryGetValues("User-Agent", out var agent)
+                    ? string.Concat(agent)
+                    : null);
 
                 var response = _respond(request);
                 response.RequestMessage ??= new HttpRequestMessage(request.Method, request.RequestUri);

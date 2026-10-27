@@ -45,22 +45,36 @@ namespace QuickByte.Core.Services;
 /// </remarks>
 public sealed class RemoteFileInfoProvider : IRemoteFileInfoProvider
 {
-    private static readonly HttpClient SharedClient = new(new SocketsHttpHandler
-    {
-        PooledConnectionLifetime = TimeSpan.FromMinutes(10),
-
-        // The probe goes the way the connections will, or it describes a file
-        // they then cannot reach.
-        Proxy = AppProxy.Shared,
-        UseProxy = true,
-
-        // Same reason as HttpConnectionFactory: captured browser cookies arrive
-        // as an explicit header and must be the only ones on the request.
-        UseCookies = false
-    })
-    { Timeout = TimeSpan.FromSeconds(30) };
+    private static readonly HttpClient SharedClient = CreateClient();
 
     private readonly HttpClient _client;
+
+    private static HttpClient CreateClient()
+    {
+        var client = new HttpClient(new SocketsHttpHandler
+        {
+            PooledConnectionLifetime = TimeSpan.FromMinutes(10),
+
+            // The probe goes the way the connections will, or it describes a file
+            // they then cannot reach.
+            Proxy = AppProxy.Shared,
+            UseProxy = true,
+
+            // Same reason as HttpConnectionFactory: captured browser cookies arrive
+            // as an explicit header and must be the only ones on the request.
+            UseCookies = false
+        })
+        { Timeout = TimeSpan.FromSeconds(30) };
+
+        // This client used to send no User-Agent whatsoever, which is its own
+        // version of the failure the class exists for: a server that refuses an
+        // unrecognised client answers the probe with a landing page, and the
+        // download is then added with that page's name and size. The value
+        // actually sent is the user's, written per request by
+        // HttpRequestDecorator — this is the backstop. See AppUserAgent.
+        client.DefaultRequestHeaders.UserAgent.ParseAdd(AppUserAgent.Default);
+        return client;
+    }
 
     public RemoteFileInfoProvider() : this(SharedClient) { }
 

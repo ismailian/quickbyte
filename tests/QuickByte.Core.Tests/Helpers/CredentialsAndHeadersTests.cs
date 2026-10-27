@@ -343,4 +343,119 @@ public sealed class HttpRequestDecoratorTests
 
         Assert.Equal("max-age=0", request.Headers.CacheControl!.ToString());
     }
+
+    // The User-Agent. Every one of these goes through the explicit overload
+    // rather than the app-wide AppUserAgent.Current, which is process state the
+    // parallel suite must not be made to share; AppUserAgentTests covers that.
+    //
+    // They assert against NonValidated, not GetValues: GetValues *parses* this
+    // header, so "Mozilla/5.0 (a browser)" comes back as two product tokens and
+    // an invalid one comes back reassembled. NonValidated gives the raw strings,
+    // one per write — which is exactly what "the request carries one agent, and
+    // it is this one" means.
+    // Single, because two writes is the failure mode worth naming: ours appended
+    // beside a captured one is a request claiming to be two different clients.
+    private static string OneUserAgent(HttpRequestMessage request) =>
+        Assert.Single(request.Headers.NonValidated["User-Agent"]);
+
+    [Fact]
+    public void Apply_presents_the_configured_user_agent()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://example.com/f.bin");
+
+        HttpRequestDecorator.Apply(request, RequestOptions.None, "Wget/1.21.4");
+
+        Assert.Equal("Wget/1.21.4", OneUserAgent(request));
+    }
+
+    [Fact]
+    public void Apply_presents_a_user_agent_even_with_no_options_at_all()
+    {
+        // The probe is reached this way, and its client used to carry no
+        // User-Agent of its own — so returning early here meant a request that
+        // identified itself as nothing.
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://example.com/f.bin");
+
+        HttpRequestDecorator.Apply(request, null, "Wget/1.21.4");
+
+        Assert.Equal("Wget/1.21.4", OneUserAgent(request));
+    }
+
+    [Fact]
+    public void A_captured_user_agent_beats_the_configured_one()
+    {
+        // The browser's own value is the one its captured Cookie was issued to,
+        // and a server that pins a session to its agent answers a mismatched
+        // pair with the sign-in page the capture existed to avoid.
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://example.com/f.bin");
+
+        HttpRequestDecorator.Apply(request, new RequestOptions
+        {
+            Headers = new Dictionary<string, string>
+            {
+                ["Cookie"] = "session=abc",
+                ["User-Agent"] = "Mozilla/5.0 (a browser)"
+            }
+        }, "Wget/1.21.4");
+
+        Assert.Equal("Mozilla/5.0 (a browser)", OneUserAgent(request));
+    }
+
+    [Fact]
+    public void A_captured_user_agent_wins_whatever_its_header_is_spelled_like()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://example.com/f.bin");
+
+        HttpRequestDecorator.Apply(request, new RequestOptions
+        {
+            Headers = new Dictionary<string, string> { ["user-agent"] = "Mozilla/5.0 (a browser)" }
+        }, "Wget/1.21.4");
+
+        Assert.Equal("Mozilla/5.0 (a browser)", OneUserAgent(request));
+    }
+
+    [Fact]
+    public void Apply_leaves_a_user_agent_the_caller_already_set()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://example.com/f.bin");
+        request.Headers.TryAddWithoutValidation("User-Agent", "Something/1.0");
+
+        HttpRequestDecorator.Apply(request, RequestOptions.None, "Wget/1.21.4");
+
+        Assert.Equal("Something/1.0", OneUserAgent(request));
+    }
+
+    [Fact]
+    public void A_user_agent_HttpClient_would_refuse_is_still_sent()
+    {
+        // Written without validation on purpose: the value's job is to look like
+        // whatever a server accepts, and HttpClient parses this header more
+        // strictly than real servers write it. AppUserAgent.Normalize has
+        // already refused the one thing that is unsafe.
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://example.com/f.bin");
+
+        HttpRequestDecorator.Apply(request, RequestOptions.None, "Mozilla/5.0 (Windows");
+
+        Assert.Equal("Mozilla/5.0 (Windows", OneUserAgent(request));
+    }
+
+    [Fact]
+    public void The_user_agent_is_sent_alongside_everything_else_a_request_carries()
+    {
+        // All of it on one request: the credentials, the bypass pair and the
+        // agent. A probe and its connections have to agree on every one of them.
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://example.com/f.bin");
+
+        HttpRequestDecorator.Apply(request, new RequestOptions
+        {
+            Credentials = new DownloadCredentials { UserName = "alice", Password = "hunter2" },
+            BypassCache = true,
+            Headers = new Dictionary<string, string> { ["Referer"] = "https://example.com/d" }
+        }, "Wget/1.21.4");
+
+        Assert.Equal("Wget/1.21.4", OneUserAgent(request));
+        Assert.Equal("Basic", request.Headers.Authorization!.Scheme);
+        Assert.True(request.Headers.CacheControl!.NoCache);
+        Assert.Equal("https://example.com/d", Assert.Single(request.Headers.GetValues("Referer")));
+    }
 }

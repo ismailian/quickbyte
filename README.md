@@ -856,6 +856,7 @@ directly to `DownloadSettings`:
 | Retry base delay | default 1500 ms (exponential backoff) |
 | Max concurrent downloads | default 3 |
 | Global speed limit | default 0 (unlimited), in KB/s |
+| Custom User-Agent | blank (QuickByte's own), up to 512 characters |
 | Progress sampling interval | default 100 ms (clamped to 50–2000) |
 | Default download folder | `~/Downloads/QuickByte` |
 | Open the details window automatically | on |
@@ -885,9 +886,10 @@ Where *finished* files land is unaffected and is still yours to choose — the
 **Folders** tab sets the default, and Add Download's **Save to** box overrides
 it for a single file.
 
-Three of these are honoured **live** rather than at the next download: the
+Four of these are honoured **live** rather than at the next download: the
 global speed limit, browser integration (enabling it, or moving its port, takes
-effect on Save), and the proxy. Everything else is snapshotted — see `CLAUDE.md`.
+effect on Save), the proxy, and the custom User-Agent. Everything else is
+snapshotted — see `CLAUDE.md`.
 
 ### Proxy
 
@@ -917,6 +919,33 @@ forms Windows takes). This machine is never reached through a proxy.
 
 A proxy sees the address of every download, and HTTP and SOCKS proxies receive
 their password unencrypted; the tab says so.
+
+### Custom User-Agent
+
+The **Connection** tab's *Custom User-Agent* decides what QuickByte claims to be.
+Blank — the default — is QuickByte itself; filling it in with a browser's
+User-Agent is the fix for a server that refuses downloaders. That refusal is
+rarely an honest error: it arrives as a `403`, as a redirect to a landing page,
+or as an HTML error served with a `200`, none of which the engine can tell apart
+from the file it asked for, so only the user can say what to claim to be.
+
+- **Every request uses it** — the metadata probe, all of a download's
+  connections, streaming playlists, pieces and keys, and the update check. The
+  probe especially: it is the request that decides a file's name, its size and
+  whether it is split at all, and it used to send no User-Agent whatsoever.
+- **A link captured by the browser extension keeps the browser's own value**,
+  which takes precedence over the setting. That string is the one the browser
+  paired with the cookies captured beside it, and a server that ties a session to
+  the agent it issued answers a mismatched pair with the sign-in page the capture
+  existed to avoid.
+- **It applies on Save**, like the proxy and the speed limit.
+- FTP has no such header, so the setting does not reach FTP downloads.
+
+The value is sent exactly as typed — servers accept User-Agent strings stricter
+parsers would refuse — with two limits: 512 characters, and no line breaks,
+since a header value carrying one is a way to smuggle a second header onto the
+request. Options refuses a value that breaks either rule rather than quietly
+dropping it.
 
 The two startup settings are on the **System** tab, beside keeping the computer
 awake while downloads run. "Start with Windows"

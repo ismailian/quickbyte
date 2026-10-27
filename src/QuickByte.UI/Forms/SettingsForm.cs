@@ -86,8 +86,10 @@ public sealed class SettingsForm : Form
     {
         Text = "QuickByte Options";
         Width = 600;
-        // Sized for the tallest tab — Interface, at six rows of 58 px.
-        Height = 650;
+        // Sized for the tallest tab — Connection, at seven rows of 58 px. A row
+        // short of that and the last one is clipped, because NewGrid's rows are
+        // Absolute and only the trailing filler gives.
+        Height = 676;
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -111,7 +113,7 @@ public sealed class SettingsForm : Form
 
     private void BuildConnectionTab(Panel page)
     {
-        var layout = NewGrid(page, rows: 6);
+        var layout = NewGrid(page, rows: 7);
         int row = 0;
 
         _defaultConnectionsBox = AddConnectionsRow(layout, row++,
@@ -138,9 +140,17 @@ public sealed class SettingsForm : Form
             "Grows with exponential backoff on each successive retry.",
             100, 60000, increment: 100);
 
+        // The hint is short because a text row's caption gets only the 200 px
+        // column — unlike a numeric row's, which spans two. The tooltip carries
+        // the rest.
         _customUserAgent = AddTextRow(layout, row++,
             "Custom User-Agent",
-            "A custom User-Agent value for the http connection.");
+            "Blank is QuickByte's own.");
+        _customUserAgent.PlaceholderText = AppUserAgent.Default;
+        _tips.SetToolTip(_customUserAgent,
+            "Sent with every request QuickByte makes. Set it to a browser's User-Agent for a server "
+            + "that refuses downloaders. A link captured by the browser extension keeps the browser's "
+            + "own value instead, since that is the one its cookies were issued to.");
 
         _dynamicSegmentationCheckBox = AddCheckRow(layout, row++,
             "Split the slowest segment when a connection finishes early");
@@ -702,7 +712,10 @@ public sealed class SettingsForm : Form
         _dynamicSegmentationCheckBox.Checked = s.DynamicSegmentation;
         _maxConcurrentUpDown.Value = Math.Clamp(s.MaxConcurrentDownloads, 1, 20);
         _globalSpeedLimitUpDown.Value = Math.Clamp(s.GlobalSpeedLimitBytesPerSecond / ByteFormatter.BytesPerKilobyte, 0, 1_000_000);
-        _customUserAgent.Text = s.CustomUserAgent;
+        // Null is the default, and the field shows the built-in value as its
+        // placeholder rather than pre-filling it: a value sitting in the box is
+        // one the user chose, which is what the Save validation below reads.
+        _customUserAgent.Text = s.CustomUserAgent ?? string.Empty;
         _progressIntervalUpDown.Value = Math.Clamp(s.ProgressUpdateIntervalMilliseconds, 50, 2000);
         // Abbreviated the same way Add Download's "Save to" is, and read back
         // through UserPath.Expand in OnSaveClicked — see UserPath for why the
@@ -782,7 +795,10 @@ public sealed class SettingsForm : Form
             DynamicSegmentation = _dynamicSegmentationCheckBox.Checked,
             MaxConcurrentDownloads = (int)_maxConcurrentUpDown.Value,
             GlobalSpeedLimitBytesPerSecond = (long)_globalSpeedLimitUpDown.Value * ByteFormatter.BytesPerKilobyte,
-            CustomUserAgent = _customUserAgent.Text,
+            // Normalized, not the raw text: a blank or whitespace-only box has to
+            // persist as null so it reads back as "use QuickByte's own" rather
+            // than as a User-Agent made of spaces.
+            CustomUserAgent = AppUserAgent.Normalize(_customUserAgent.Text),
             ProgressUpdateIntervalMilliseconds = (int)_progressIntervalUpDown.Value,
             // Expanded, never the displayed text: this value is persisted and is
             // what Directory.CreateDirectory below is handed, and a literal "~"
@@ -828,6 +844,19 @@ public sealed class SettingsForm : Form
         if (updated.Proxy.Mode == ProxyMode.Manual && !updated.Proxy.IsComplete)
         {
             MessageBox.Show(this, "Enter the proxy's host name or address and its port, or choose another way to connect.",
+                "Options", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        // Refused here rather than silently dropped, because a User-Agent that
+        // did not take is indistinguishable from one the server ignored — the
+        // user would go on believing they had set it. The rules are only the two
+        // that have to hold; see AppUserAgent.Normalize.
+        if (!AppUserAgent.IsAcceptable(_customUserAgent.Text))
+        {
+            MessageBox.Show(this,
+                $"The User-Agent has to be a single line of at most {AppUserAgent.MaxLength} characters. "
+                + "Leave it blank for QuickByte's own.",
                 "Options", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }

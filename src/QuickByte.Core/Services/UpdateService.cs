@@ -50,6 +50,22 @@ public sealed class UpdateService : IUpdateService
     })
     { Timeout = TimeSpan.FromSeconds(30) };
 
+    /// <summary>
+    /// The two requests here are the only ones in the engine that do not go
+    /// through <see cref="HttpRequestDecorator"/> — they carry no download's
+    /// options — so they stamp the User-Agent themselves.
+    ///
+    /// They get the user's custom value for the same reason the comment above
+    /// hands them the user's proxy: a network that refuses a client it does not
+    /// recognise refuses the manifest fetch too, and the installer download is a
+    /// plain HTTPS GET against a release host, which is exactly the kind that
+    /// answers an unfamiliar agent with a 403. An update check that silently
+    /// reports "no update available" on a network where every other download
+    /// works is the failure this avoids.
+    /// </summary>
+    private static void StampUserAgent(HttpRequestMessage request) =>
+        request.Headers.TryAddWithoutValidation("User-Agent", AppUserAgent.Current);
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -82,6 +98,7 @@ public sealed class UpdateService : IUpdateService
     public async Task<UpdateCheckResult> CheckForUpdateAsync(string currentVersion, CancellationToken cancellationToken = default)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, ManifestUrl);
+        StampUserAgent(request);
 
         // A CDN happily serving yesterday's manifest is the one failure mode
         // that looks exactly like "no update available", so ask for a fresh one.
@@ -179,7 +196,10 @@ public sealed class UpdateService : IUpdateService
         IProgress<UpdateDownloadProgress>? progress,
         CancellationToken cancellationToken)
     {
-        using var response = await Client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+        StampUserAgent(request);
+
+        using var response = await Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
             .ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 

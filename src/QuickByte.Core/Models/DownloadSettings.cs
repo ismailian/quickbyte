@@ -50,10 +50,21 @@ public sealed class DownloadSettings
     public int RetryDelayMilliseconds { get; set; } = 1500;
 
     /// <summary>
-    /// Custom User-Agent.
-    /// This property is used to override the default value sent in the User-Agent header with every http request.
+    /// What to send as <c>User-Agent</c> instead of QuickByte's own, on every
+    /// HTTP request the app makes. Null or blank — the default — means QuickByte
+    /// identifies itself, which is what almost every server wants.
+    ///
+    /// It is here for the servers that do not: a client they do not recognise is
+    /// met with a <c>403</c>, a redirect to a landing page, or an HTML error
+    /// served as a <c>200</c>, and none of those is a failure the engine can tell
+    /// apart from the file it asked for. Claiming to be a browser is the only
+    /// fix, and only the user knows which one to claim to be.
+    ///
+    /// Unlike the rest of this object it is not snapshotted per download — see
+    /// <see cref="Helpers.AppUserAgent"/>, which the composition root keeps in
+    /// step with this field, and which every request reads as it is built.
     /// </summary>
-    public string CustomUserAgent { get; set; } = null!;
+    public string? CustomUserAgent { get; set; }
 
     /// <summary>
     /// Folder finished downloads are saved to by default. An ordinary setting

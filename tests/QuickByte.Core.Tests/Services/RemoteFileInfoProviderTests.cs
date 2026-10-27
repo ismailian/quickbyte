@@ -76,6 +76,42 @@ public sealed class RemoteFileInfoProviderTests
         Assert.Equal(Size, info.ContentLength);
     }
 
+    [Fact]
+    public async Task Every_probe_request_says_who_is_asking()
+    {
+        // This client used to carry no User-Agent on any request, which is the
+        // probe's own version of the failure above: a server that refuses a
+        // client it does not recognise answers with a landing page, and the
+        // download is then added with that page's name and size. The HEAD and
+        // both GETs have to identify themselves — the connections that follow
+        // do, and a probe that asks differently describes a different file.
+        using var stub = new StubServer(
+            Head(size: Size, acceptRanges: true),
+            WholeFileProbe(),
+            PartialProbe());
+
+        await new RemoteFileInfoProvider(stub.Client).GetFileInfoAsync(Url);
+
+        Assert.Equal(3, stub.Requests.Count);
+        Assert.All(stub.Requests, asked => Assert.False(string.IsNullOrWhiteSpace(asked.UserAgent)));
+    }
+
+    [Fact]
+    public async Task A_captured_browser_agent_is_what_the_probe_presents()
+    {
+        // The browser extension's value, paired with the Cookie captured beside
+        // it. The probe has to send the pair the browser sent, or it resolves
+        // the sign-in page the capture existed to avoid.
+        using var stub = new StubServer(Head(size: Size, acceptRanges: true), PartialProbe());
+
+        await new RemoteFileInfoProvider(stub.Client).GetFileInfoAsync(Url, new RequestOptions
+        {
+            Headers = new Dictionary<string, string> { ["User-Agent"] = "Mozilla/5.0 (a browser)" }
+        });
+
+        Assert.All(stub.Requests, asked => Assert.Equal("Mozilla/5.0 (a browser)", asked.UserAgent));
+    }
+
     // --------------------------------------- a cache that cannot slice a file --
 
     [Fact]
@@ -444,7 +480,8 @@ public sealed class RemoteFileInfoProviderTests
         public void Dispose() => Client.Dispose();
 
         /// <summary>What one request carried, captured before the message is disposed.</summary>
-        public sealed record Asked(string Method, string? Range, string? CacheControl, string? Pragma, string? IfRange);
+        public sealed record Asked(
+            string Method, string? Range, string? CacheControl, string? Pragma, string? IfRange, string? UserAgent);
 
         private sealed class Handler : HttpMessageHandler
         {
@@ -462,7 +499,13 @@ public sealed class RemoteFileInfoProviderTests
                     request.Headers.Range?.ToString(),
                     request.Headers.CacheControl?.ToString(),
                     request.Headers.Pragma.Count > 0 ? request.Headers.Pragma.First().ToString() : null,
-                    request.Headers.IfRange?.ToString()));
+                    request.Headers.IfRange?.ToString(),
+                    // Raw rather than parsed: a User-Agent read back through the
+                    // typed collection is re-assembled from product tokens, and
+                    // what matters here is the string that went on the wire.
+                    request.Headers.NonValidated.TryGetValues("User-Agent", out var agent)
+                        ? string.Concat(agent)
+                        : null));
 
                 var respond = _script[Math.Min(Requests.Count - 1, _script.Length - 1)];
                 return Task.FromResult(respond(request));

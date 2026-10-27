@@ -1,3 +1,4 @@
+using QuickByte.Core.Helpers;
 using QuickByte.Core.Interfaces;
 using QuickByte.Core.Models;
 using QuickByte.Core.Services.Proxy;
@@ -14,7 +15,15 @@ public sealed class HttpConnectionFactory : IConnectionFactory
 {
     internal static readonly HttpClient SharedClient = CreateClient();
 
-    internal const string UserAgent = "QuickByte/1.0 (+https://github.com/ismailian/quickbyte)";
+    /// <summary>
+    /// QuickByte's own User-Agent. The value actually sent is
+    /// <see cref="AppUserAgent.Current"/>, written per request by
+    /// <see cref="HttpRequestDecorator"/> — this is the client-wide backstop, and
+    /// it is a fixed string on purpose: re-stamping these defaults when Options
+    /// changes would race every request in flight on a client shared by every
+    /// connection of every download. See <see cref="AppUserAgent"/>.
+    /// </summary>
+    internal const string UserAgent = AppUserAgent.Default;
 
     private static HttpClient CreateClient()
     {
@@ -24,17 +33,6 @@ public sealed class HttpConnectionFactory : IConnectionFactory
         };
         client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
         return client;
-    }
-
-    private static HttpClient SetUserAgent(DownloadSettings downloadSettings)
-    {
-        if (!string.IsNullOrEmpty(downloadSettings.CustomUserAgent))
-        {
-            SharedClient.DefaultRequestHeaders.UserAgent.Clear();
-            SharedClient.DefaultRequestHeaders.UserAgent.ParseAdd(downloadSettings.CustomUserAgent);
-        }
-
-        return SharedClient;
     }
 
     /// <summary>
@@ -71,11 +69,7 @@ public sealed class HttpConnectionFactory : IConnectionFactory
         RequestOptions? options = null)
     {
         return new DownloadConnection(
-            SetUserAgent(settings),
-            connectionId, url,
-            rangeStart, rangeEnd, alreadyDownloaded,
-            chunkFilePath,
-            settings, bandwidthLimiter, options
-        );
+            SharedClient, connectionId, url, rangeStart, rangeEnd, alreadyDownloaded, chunkFilePath,
+            settings, bandwidthLimiter, options);
     }
 }

@@ -15,7 +15,23 @@ namespace QuickByte.Core.Helpers;
 internal static class HttpRequestDecorator
 {
     public static void Apply(HttpRequestMessage request, RequestOptions? options)
+        => Apply(request, options, AppUserAgent.Current);
+
+    /// <param name="userAgent">
+    /// The User-Agent to present. A seam, and the only reason this overload
+    /// exists: <see cref="AppUserAgent.Current"/> is process-wide live state, and
+    /// the Core suite runs its tests in parallel, so a test that configured it
+    /// would be read by whatever else was mid-assertion.
+    /// </param>
+    internal static void Apply(HttpRequestMessage request, RequestOptions? options, string userAgent)
     {
+        // Before the early return below, and deliberately: the User-Agent is an
+        // app-wide setting rather than part of a request's options, and a request
+        // made with no options at all still has to carry one. The metadata
+        // probe's client sets no default of its own, so for that path this is the
+        // only thing that identifies QuickByte at all.
+        ApplyUserAgent(request, options, userAgent);
+
         if (options is null) return;
 
         if (options.Credentials is { IsEmpty: false } credentials)
@@ -67,6 +83,41 @@ internal static class HttpRequestDecorator
 
             request.Headers.TryAddWithoutValidation(name, value);
         }
+    }
+
+    /// <summary>
+    /// Writes the User-Agent, unless something more specific owns it.
+    ///
+    /// A captured one wins over the user's setting, and the setting over
+    /// QuickByte's own — most specific first. The browser extension's is the most
+    /// specific there is: it is the string the browser paired with the
+    /// <c>Cookie</c> captured alongside it, and a server that pins a session to
+    /// the agent it was issued to answers a mismatched pair with the sign-in page
+    /// the capture existed to avoid. It is written by the header loop above, so
+    /// all this does is stay out of its way — appending ours too would put two
+    /// agents on one request.
+    /// </summary>
+    private static void ApplyUserAgent(HttpRequestMessage request, RequestOptions? options, string userAgent)
+    {
+        if (string.IsNullOrEmpty(userAgent)) return;
+
+        // Already set by the caller, or by an earlier Apply on the same request.
+        if (request.Headers.Contains("User-Agent")) return;
+
+        if (options?.Headers is { } headers)
+        {
+            foreach (var (name, _) in headers)
+            {
+                if (name.Equals("User-Agent", StringComparison.OrdinalIgnoreCase)) return;
+            }
+        }
+
+        // Without validation, for the reason the captured headers above are: the
+        // value's job is to look like whatever a server will accept, and
+        // HttpClient parses a User-Agent more strictly than servers write them.
+        // AppUserAgent.Normalize has already refused the only thing that is
+        // actually unsafe here, a control character.
+        request.Headers.TryAddWithoutValidation("User-Agent", userAgent);
     }
 
     /// <summary>
